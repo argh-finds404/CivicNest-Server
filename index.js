@@ -2,13 +2,21 @@ const express = require("express");
 require("dotenv").config();
 const http = require("http");
 const { Server } = require("socket.io");
+const cors = require("cors");
 const app = express();
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  process.env.CLIENT_BASE_URL,
+  process.env.CLIENT_URL
+].filter(Boolean);
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", 
-    methods: ["GET", "POST", "PATCH", "PUT", "DELETE"]
+    origin: allowedOrigins,
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
+    credentials: true
   }
 });
 app.set("io", io);
@@ -64,11 +72,13 @@ io.on("connection", (socket) => {
   });
 });
 
-const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = process.env.PORT||3000;
 
-app.use(cors());
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}));
 
 // stripe webhook needs raw body, must load before json parser
 const paymentRoutes = require("./routes/payment");
