@@ -21,37 +21,34 @@ async function connectDB() {
     await client.connect();
     db = client.db("communityDB");
     
-    // Connect mongoose as well
     await mongoose.connect(uri, {
       dbName: "communityDB"
     });
 
-    // Create TTL Index for Notifications (7 days expiry)
+    // TTL Index for Notifications (7 days)
     await db.collection("notifications").createIndex(
       { createdAt: 1 },
       { expireAfterSeconds: 604800 }
     ).catch(console.error);
 
-    // Create TTL Index for Lost & Found (expires at expiresAt)
+    // TTL Index for Lost & Found
     await db.collection("lostFound").createIndex(
       { expiresAt: 1 },
       { expireAfterSeconds: 0 }
     ).catch(console.error);
 
-    // Create compound indexes for forum collection (optimizing topic filtering and sorting)
     const forumCol = db.collection("forum");
     await forumCol.createIndex({ approvalStatus: 1, category: 1, isPinned: -1, date: -1 }).catch(console.error);
     await forumCol.createIndex({ approvalStatus: 1, category: 1, upvoteCount: -1, date: -1 }).catch(console.error);
     await forumCol.createIndex({ approvalStatus: 1, isPinned: -1, date: -1 }).catch(console.error);
     await forumCol.createIndex({ approvalStatus: 1, upvoteCount: -1, date: -1 }).catch(console.error);
     
-    // Create optimized indexes for recent activities / feed events and incidents
     await db.collection("feed_events").createIndex({ createdAt: -1 }).catch(console.error);
     await db.collection("incidents").createIndex({ createdAt: -1 }).catch(console.error);
     
     console.log("Connected to MongoDB (Native & Mongoose)!");
 
-    // Asynchronous background volunteer profile name/photo database cleanup
+    // async volunteer name/photo migration
     setImmediate(async () => {
       try {
         const volsCol = db.collection("volunteers");

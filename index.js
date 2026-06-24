@@ -68,10 +68,9 @@ const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = process.env.PORT||3000;
 
-// Middlewares
 app.use(cors());
 
-// Stripe Webhook MUST be placed before express.json()
+// stripe webhook needs raw body, must load before json parser
 const paymentRoutes = require("./routes/payment");
 app.post("/api/payment/stripe-webhook", express.raw({ type: 'application/json' }), paymentRoutes.stripeWebhookHandler);
 
@@ -108,7 +107,6 @@ const { verifyToken } = require("./middleware/auth");
 
 const { connectDB } = require("./config/db");
 
-// Route imports
 const usersRoutes = require("./routes/users");
 const issuesRoutes = require("./routes/issues");
 const contributionsRoutes = require("./routes/contributions");
@@ -136,7 +134,6 @@ app.get("/", (req, res) => {
   res.send("Hello World! CivicNest API is running.");
 });
 
-// Setup API routes
 app.use("/public", publicRoutes);
 app.use("/users", usersRoutes);
 app.use("/issues", issuesRoutes);
@@ -159,7 +156,6 @@ app.use("/cleanup-events", cleanupEventsRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/gallery", galleryRoutes);
 
-// Register comment routes
 app.use("/issues/:id/comments", commentsRoutes);
 app.use("/comments", singleCommentRoutes);
 

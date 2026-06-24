@@ -4,3 +4,4 @@ uploads/
 beautify-auth-firebase-adminsdk-*.json
 *.pem
 *.key
+scratch/
