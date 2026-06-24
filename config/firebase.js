@@ -3,8 +3,21 @@ const admin = require("firebase-admin");
 if (!admin.apps.length) {
   let credential;
 
-  // load from env string in prod
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  // load from individual env vars (Render/prod deployment)
+  if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+    try {
+      credential = admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      });
+    } catch (e) {
+      console.error("Failed to initialize Firebase from individual env vars:", e.message);
+    }
+  }
+
+  // load from env JSON string in prod
+  if (!credential && process.env.FIREBASE_SERVICE_ACCOUNT) {
     try {
       credential = admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT));
     } catch (e) {
