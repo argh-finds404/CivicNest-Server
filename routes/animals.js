@@ -34,28 +34,29 @@ router.post('/:id/volunteer', verifyToken, async (req, res) => {
     if (!animal) return res.status(404).json({ message: 'Not found.' });
 
     const volunteers = animal.volunteers || [];
+    const userEmail = req.user.email || `guest_${req.user.uid}@civicnest.local`;
     const alreadyVolunteered = volunteers.some(v => 
-      (typeof v === 'string' && v === req.user.email) || 
-      (v && v.email === req.user.email)
+      (typeof v === 'string' && v === userEmail) || 
+      (v && v.email === userEmail)
     );
 
     let update;
     if (alreadyVolunteered) {
       // Pull volunteer from list
       update = {
-        $pull: { volunteers: { email: req.user.email } },
+        $pull: { volunteers: { email: userEmail } },
         $inc: { volunteerCount: -1 }
       };
       await col.updateOne({ _id: new ObjectId(req.params.id) }, update);
       // Fallback: also pull string email in case of mixed strings
       await col.updateOne({ _id: new ObjectId(req.params.id) }, {
-        $pull: { volunteers: req.user.email }
+        $pull: { volunteers: userEmail }
       });
     } else {
       const volunteerEntry = {
-        email:    req.user.email,
-        name:     req.user.displayName || req.user.email.split('@')[0],
-        photoURL: req.user.photoURL || null,
+        email:    userEmail,
+        name:     req.user.name || req.user.displayName || userEmail.split('@')[0],
+        photoURL: req.user.picture || req.user.photoURL || null,
       };
       update = { 
         $push: { volunteers: volunteerEntry }, 
@@ -178,8 +179,8 @@ router.post("/", verifyToken, creditCheck("animals"), async (req, res) => {
     approvalStatus: 'approved',
     reporter: {
       email: req.user.email,
-      name: req.user.displayName || req.user.email.split('@')[0],
-      photoURL: req.user.photoURL || null
+      name: req.user.name || req.user.displayName || (req.user.email ? req.user.email.split('@')[0] : 'Anonymous'),
+      photoURL: req.user.picture || req.user.photoURL || null
     },
     date: new Date()
   };
@@ -271,7 +272,7 @@ router.post('/:id/adopt-request', verifyToken, async (req, res) => {
     const { phone, message } = req.body;
     const requestEntry = {
       email: req.user.email,
-      name: req.user.displayName || req.user.email.split('@')[0],
+      name: req.user.name || req.user.displayName || (req.user.email ? req.user.email.split('@')[0] : 'Anonymous'),
       phone: phone || '',
       message: message || '',
       date: new Date()
