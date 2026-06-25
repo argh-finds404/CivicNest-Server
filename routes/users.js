@@ -52,7 +52,12 @@ router.post("/", verifyToken, async (req, res) => {
       points: 0,
       createdAt: new Date(),
       issueCredits: 3,
-      creditRegenTimestamps: []
+      creditRegenTimestamps: [],
+      streak: {
+        current: 0,
+        best: 0,
+        lastActiveDate: null
+      }
     }
   };
 
