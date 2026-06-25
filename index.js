@@ -11,10 +11,28 @@ const allowedOrigins = [
   process.env.CLIENT_URL
 ].filter(Boolean);
 
+const corsOriginOption = function (origin, callback) {
+  if (!origin) return callback(null, true);
+  if (allowedOrigins.indexOf(origin) !== -1) {
+    return callback(null, true);
+  }
+  const isWhitelisted = 
+    origin.includes("localhost") || 
+    origin.endsWith(".firebaseapp.com") || 
+    origin.endsWith(".web.app") || 
+    origin.endsWith(".vercel.app") || 
+    origin.endsWith(".netlify.app");
+    
+  if (isWhitelisted) {
+    return callback(null, true);
+  }
+  callback(new Error(`Origin ${origin} not allowed by CORS`));
+};
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: corsOriginOption,
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
     credentials: true
   }
@@ -76,7 +94,7 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = process.env.PORT||3000;
 
 app.use(cors({
-  origin: allowedOrigins,
+  origin: corsOriginOption,
   credentials: true
 }));
 
