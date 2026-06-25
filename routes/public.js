@@ -322,10 +322,54 @@ router.get("/search", async (req, res) => {
       }).limit(5).toArray();
     }
 
+    // Search lostFound
+    const lostFoundDb = getCollection("lostFound");
+    let lostFoundList = [];
+    if (lostFoundDb) {
+      lostFoundList = await lostFoundDb.find({
+        $or: [{ itemName: searchRegex }, { description: searchRegex }],
+        approvalStatus: "approved"
+      }).limit(5).toArray();
+    }
+
+    // Search animals
+    const animalsDb = getCollection("animals");
+    let animalsList = [];
+    if (animalsDb) {
+      animalsList = await animalsDb.find({
+        $or: [{ animalType: searchRegex }, { condition: searchRegex }],
+        approvalStatus: "approved"
+      }).limit(5).toArray();
+    }
+
+    // Search NGOs
+    const ngosDb = getCollection("ngos");
+    let ngosList = [];
+    if (ngosDb) {
+      ngosList = await ngosDb.find({
+        $or: [{ name: searchRegex }, { mission: searchRegex }],
+        status: "verified"
+      }).limit(5).toArray();
+    }
+
+    // Search Forum
+    const forumDb = getCollection("forum");
+    let forumList = [];
+    if (forumDb) {
+      forumList = await forumDb.find({
+        $or: [{ title: searchRegex }, { body: searchRegex }],
+        approvalStatus: "approved"
+      }).limit(5).toArray();
+    }
+
     const results = [
       ...issues.map(i => ({ _id: i._id, title: i.title, type: 'Issue', link: `/issues/${i._id}` })),
       ...events.map(e => ({ _id: e._id, title: e.title, type: 'Event', link: `/cleanup-events/${e._id}` })),
-      ...notices.map(n => ({ _id: n._id, title: n.title, type: 'Notice', link: `/noticeboard/${n._id}` }))
+      ...notices.map(n => ({ _id: n._id, title: n.title, type: 'Notice', link: `/noticeboard/${n._id}` })),
+      ...lostFoundList.map(lf => ({ _id: lf._id, title: lf.itemName, type: 'Lost & Found', link: `/lost-found/${lf._id}` })),
+      ...animalsList.map(a => ({ _id: a._id, title: `${a.animalType} rescue: ${a.condition.slice(0, 50)}${a.condition.length > 50 ? '...' : ''}`, type: 'Animal Rescue', link: `/animals/${a._id}` })),
+      ...ngosList.map(ngo => ({ _id: ngo._id, title: ngo.name, type: 'NGO', link: `/ngos/${ngo._id}` })),
+      ...forumList.map(f => ({ _id: f._id, title: f.title, type: 'Forum Thread', link: `/forum/${f._id}` }))
     ];
 
     res.json({ success: true, results });
