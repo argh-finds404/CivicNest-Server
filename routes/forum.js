@@ -6,9 +6,30 @@ const { creditCheck } = require('../middleware/creditCheck');
 const { getCollection } = require('../config/db');
 const { ObjectId } = require('mongodb');
 const { createNotification } = require('../utils/notificationHelper');
+const { optionalAuth, pseudonymize, safeName } = require('../middleware/optionalAuth');
+
+// The forum is readable without an account. Guests get stable pseudonymous ids
+// in place of email addresses (and no email-shaped names), so threads still
+// group by author but addresses can't be scraped.
+const forGuest = (doc) => {
+  if (!doc) return doc;
+  const out = {
+    ...doc,
+    postedBy: pseudonymize(doc.postedBy),
+    posterName: safeName(doc.posterName),
+    upvotes: (doc.upvotes || []).map(pseudonymize),
+  };
+  if (doc.replyTo) {
+    out.replyTo = { ...doc.replyTo, senderName: safeName(doc.replyTo.senderName) };
+    if (doc.replyTo.postedBy) out.replyTo.postedBy = pseudonymize(doc.replyTo.postedBy);
+    if (doc.replyTo.senderEmail) out.replyTo.senderEmail = pseudonymize(doc.replyTo.senderEmail);
+  }
+  if (Array.isArray(doc.replies)) out.replies = doc.replies.map(forGuest);
+  return out;
+};
 
 // GET /api/forum — thread list with filters
-router.get('/', async (req, res) => {
+router.get('/', optionalAuth, async (req, res) => {
   const { category, sort = 'recent', page = 1, limit = 20 } = req.query;
   const col = getCollection('forum');
 
@@ -34,11 +55,11 @@ router.get('/', async (req, res) => {
   }));
 
   const total = await col.countDocuments(query);
-  res.json({ threads: withCount, total });
+  res.json({ threads: req.user ? withCount : withCount.map(forGuest), total });
 });
 
 // GET /api/forum/:id — full thread with replies (with pagination)
-router.get('/:id', async (req, res) => {
+router.get('/:id', optionalAuth, async (req, res) => {
   const col = getCollection('forum');
   const thread = await col.findOne({ _id: new ObjectId(req.params.id) });
   if (!thread) return res.status(404).json({ message: 'Thread not found.' });
@@ -65,7 +86,7 @@ router.get('/:id', async (req, res) => {
 
   thread.replies = paginatedReplies;
   thread.hasMore = hasMore;
-  res.json(thread);
+  res.json(req.user ? thread : forGuest(thread));
 });
 
 // GET /api/forum/users/search - Search registered users for mentions (Protected)
