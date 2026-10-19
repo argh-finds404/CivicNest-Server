@@ -155,6 +155,7 @@ app.post("/upload", verifyToken, adminOnly, async (req, res) => {
 
 
 const { connectDB } = require("./config/db");
+const { backfillTickets } = require("./services/tickets");
 
 const usersRoutes = require("./routes/users");
 const issuesRoutes = require("./routes/issues");
@@ -178,6 +179,7 @@ const pollsRoutes = require("./routes/polls");
 const publicRoutes = require("./routes/public");
 const cleanupEventsRoutes = require("./routes/cleanupEvents");
 const galleryRoutes = require("./routes/gallery");
+const ticketsRoutes = require("./routes/tickets");
 
 app.get("/", (req, res) => {
   res.send("Hello World! CivicNest API is running.");
@@ -204,6 +206,7 @@ app.use("/polls", pollsRoutes);
 app.use("/cleanup-events", cleanupEventsRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/gallery", galleryRoutes);
+app.use("/tickets", ticketsRoutes);
 
 app.use("/issues/:id/comments", commentsRoutes);
 app.use("/comments", singleCommentRoutes);
@@ -235,6 +238,20 @@ async function startServer() {
   try {
     const db = await connectDB();
     app.locals.db = db;
+
+    // Tickets: unique indexes (same as the Prisma schema), then give existing
+    // reports their tickets in the background
+    const tickets = db.collection("tickets");
+    await Promise.all([
+      tickets.createIndex({ code: 1 }, { unique: true }),
+      tickets.createIndex({ number: 1 }, { unique: true }),
+      tickets.createIndex({ issueId: 1 }, { unique: true }),
+      tickets.createIndex({ status: 1, priority: 1 }),
+      tickets.createIndex({ reporterEmail: 1 }),
+    ]).catch((err) => console.error("[tickets] index setup failed:", err.message));
+    setImmediate(() =>
+      backfillTickets(db.collection("issues")).catch((err) => console.error("[tickets] backfill failed:", err.message))
+    );
     server.listen(port, () => {
       console.log(`CivicNest Server running on port ${port}`);
     });

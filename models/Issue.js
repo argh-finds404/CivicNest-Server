@@ -69,6 +69,8 @@ const issueSchema = new mongoose.Schema({
     photoURL: String
   },
   isAnonymous: { type: Boolean, default: false },
+  // Public ticket code (CN-2026-000123); the ticket itself lives in `tickets`
+  ticketCode: { type: String, index: true },
   isPremiumFeature: { type: Boolean, default: false },
   
   approvalStatus: { type: String, enum: ['pending_review', 'approved', 'rejected'], default: 'pending_review' },
@@ -80,7 +82,7 @@ const issueSchema = new mongoose.Schema({
   adminNote: { type: String, default: null }, // Never returned to public
   resolvedAt: { type: Date, default: null },
   
-  status: { type: String, enum: ['open', 'pending', 'in_review', 'action_taken', 'solved', 'rejected'], default: 'open' },
+  status: { type: String, enum: ['open', 'pending', 'in_review', 'action_taken', 'pending_verification', 'solved', 'rejected'], default: 'open' },
   statusChangedAt: { type: Date, default: Date.now },
   statusChangedBy: String,
   
