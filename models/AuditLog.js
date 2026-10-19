@@ -1,31 +1,23 @@
 const mongoose = require("mongoose");
 
+// Who did what to which record. Written by utils/auditHelper.logAudit for staff
+// (admin and moderator) actions; never blocks the action itself.
 const auditLogSchema = new mongoose.Schema({
-  action: { 
-    type: String, 
-    enum: [
-      'APPROVE_ISSUE', 'REJECT_ISSUE', 'CHANGE_STATUS', 'DELETE_COMMENT', 
-      'REVEAL_IDENTITY', 'CHANGE_USER_ROLE', 'SUBMISSION_DISMISSED',
-      'ANNOUNCEMENT_CREATED', 'ANNOUNCEMENT_DELETED'
-    ],
-    required: true 
-  },
-  targetType: { 
-    type: String, 
-    enum: ['issue', 'comment', 'user', 'lostfound', 'announcement'],
-    required: true
-  },
-  targetId: { type: mongoose.Schema.Types.ObjectId, required: true },
+  // e.g. APPROVE_ISSUE, CHANGE_STATUS, CHANGE_USER_ROLE, CLEANUP_EVENT_REJECTED
+  action: { type: String, required: true, index: true },
+  // e.g. issue, comment, user, lostfound, announcement, cleanup_event
+  targetType: { type: String, required: true },
+  targetId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
   performedBy: {
-    adminEmail: { type: String, required: true },
-    adminName: { type: String, required: true },
-    adminId: { type: String, required: true }
+    email: { type: String, required: true, index: true },
+    name: { type: String },
+    role: { type: String }, // admin | moderator
   },
-  detail: { type: String, required: true },
+  detail: { type: String },
   previousValue: { type: String },
   newValue: { type: String },
-  timestamp: { type: Date, default: Date.now },
-  ipAddress: { type: String }
+  timestamp: { type: Date, default: Date.now, index: true },
+  ipAddress: { type: String },
 });
 
 module.exports = mongoose.model("AuditLog", auditLogSchema);

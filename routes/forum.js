@@ -1,4 +1,5 @@
 const express = require('express');
+const { isStaff } = require('../utils/roles');
 const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { memberOnly } = require('../middleware/memberOnly');
@@ -290,7 +291,7 @@ router.delete('/:id', verifyToken, async (req, res) => {
   const thread = await col.findOne({ _id: new ObjectId(req.params.id) });
   if (!thread) return res.status(404).json({ message: 'Not found.' });
 
-  if (thread.postedBy !== req.user.email && req.user.role !== 'admin') {
+  if (thread.postedBy !== req.user.email && !isStaff(req.user.role)) {
     return res.status(403).json({ message: 'Cannot delete someone else\'s thread.' });
   }
 
@@ -316,7 +317,7 @@ router.delete('/:id/reply/:replyId', verifyToken, async (req, res) => {
   if (!reply) return res.status(404).json({ message: 'Reply not found.' });
 
   // Allow reply author, thread author, or admin to delete
-  if (reply.postedBy !== req.user.email && thread.postedBy !== req.user.email && req.user.role !== 'admin') {
+  if (reply.postedBy !== req.user.email && thread.postedBy !== req.user.email && !isStaff(req.user.role)) {
     return res.status(403).json({ message: 'Unauthorized to delete this reply.' });
   }
 

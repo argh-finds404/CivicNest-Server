@@ -1,4 +1,5 @@
 const { getCollection } = require("../config/db");
+const { atLeast } = require("../utils/roles");
 
 const memberOnly = async (req, res, next) => {
   if (!req.user) {
@@ -13,7 +14,7 @@ const memberOnly = async (req, res, next) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    if (user.role === "member" || user.role === "admin" || !!user.isVolunteer) {
+    if (atLeast(user.role, "member") || !!user.isVolunteer) {
       next();
     } else {
       return res.status(403).json({ error: "Forbidden: Members only", redirectTo: "/membership/request" });

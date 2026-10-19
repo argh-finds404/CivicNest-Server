@@ -18,12 +18,14 @@ const verifyToken = async (req, res, next) => {
   try {
     const decoded = await admin.auth().verifyIdToken(token);
     let role = "guest";
+    let isDemo = false;
     try {
       const usersCollection = getCollection("users");
       if (usersCollection) {
         const dbUser = await usersCollection.findOne({ email: decoded.email });
         if (dbUser) {
           role = dbUser.role || "guest";
+          isDemo = !!dbUser.isDemo;
         }
       }
     } catch (e) {
@@ -34,7 +36,8 @@ const verifyToken = async (req, res, next) => {
       uid: decoded.uid,
       name: decoded.name,
       picture: decoded.picture,
-      role: role
+      role: role,
+      isDemo,
     };
     next();
   } catch (error) {

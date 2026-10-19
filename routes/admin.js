@@ -3,6 +3,8 @@ const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const { adminOnly } = require("../middleware/adminOnly");
 const { adminOrMod } = require("../middleware/adminOrMod");
+const { ROLES, isValidRole } = require("../utils/roles");
+const { syncTicketStatus, markTriaged, safely } = require("../services/tickets");
 const { getCollection } = require("../config/db");
 const { ObjectId } = require("mongodb");
 const Issue = require("../models/Issue");
@@ -13,7 +15,7 @@ const { logAudit } = require("../utils/auditHelper");
 const { createNotification } = require("../utils/notificationHelper");
 
 // Get Dashboard Stats
-router.get("/stats", verifyToken, adminOnly, async (req, res) => {
+router.get("/stats", verifyToken, adminOrMod, async (req, res) => {
   const usersCollection = getCollection("users");
   const issuesCollection = getCollection("issues");
   const membershipCollection = getCollection("membershipRequests");
@@ -82,13 +84,33 @@ router.get("/users", verifyToken, adminOnly, async (req, res) => {
 // Update user role
 router.patch("/users/:id/role", verifyToken, adminOnly, async (req, res) => {
   const usersCollection = getCollection("users");
-  const id = req.params.id;
   const { role } = req.body;
-  
+
+  if (!isValidRole(role)) {
+    return res.status(400).json({ error: `Role must be one of: ${ROLES.join(", ")}` });
+  }
+  const target = await usersCollection.findOne({ _id: new ObjectId(req.params.id) });
+  if (!target) return res.status(404).json({ error: "User not found" });
+  if (target.email === req.user.email && role !== "admin") {
+    return res.status(400).json({ error: "You can't remove your own admin role." });
+  }
+  if (target.isDemo || req.user.isDemo) {
+    return res.status(403).json({ error: "Reviewer demo accounts can't change roles." });
+  }
+
   const result = await usersCollection.updateOne(
-    { _id: new ObjectId(id) },
-    { $set: { role: role } }
+    { _id: target._id },
+    { $set: { role, roleChangedAt: new Date(), roleChangedBy: req.user.email } }
   );
+  await logAudit({
+    performedBy: { email: req.user.email, name: req.user.name },
+    actorRole: req.user.role,
+    action: "CHANGE_USER_ROLE",
+    targetType: "user",
+    targetId: target._id,
+    previousValue: target.role,
+    newValue: role,
+  });
   res.send(result);
 });
 // Get all membership requests
@@ -268,7 +290,7 @@ router.patch("/volunteers/:id/status", verifyToken, adminOnly, async (req, res) 
 // --- Cleanup Events Moderation ---
 
 // Get all cleanup events for admin
-router.get("/cleanup-events", verifyToken, adminOnly, async (req, res) => {
+router.get("/cleanup-events", verifyToken, adminOrMod, async (req, res) => {
   try {
     const events = await CleanupEvent.find().sort({ createdAt: -1 });
     res.json(events);
@@ -278,7 +300,7 @@ router.get("/cleanup-events", verifyToken, adminOnly, async (req, res) => {
 });
 
 // Update cleanup event status
-router.patch("/cleanup-events/:id/status", verifyToken, adminOnly, async (req, res) => {
+router.patch("/cleanup-events/:id/status", verifyToken, adminOrMod, async (req, res) => {
   try {
     const { id } = req.params;
     const { approvalStatus, rejectReason } = req.body;
@@ -422,7 +444,7 @@ function computePriorityScore(issue) {
 }
 
 // GET /api/admin/queue/count - Admin only
-router.get("/queue/count", verifyToken, adminOnly, async (req, res) => {
+router.get("/queue/count", verifyToken, adminOrMod, async (req, res) => {
   try {
     const [pending_review, open, action_taken, pending_verification, solved, rejected, pending_events, rejected_events] = await Promise.all([
       Issue.countDocuments({ approvalStatus: "pending_review", isHidden: false }),
@@ -449,7 +471,7 @@ router.get("/queue/count", verifyToken, adminOnly, async (req, res) => {
 });
 
 // GET /api/admin/queue - Admin only
-router.get("/queue", verifyToken, adminOnly, async (req, res) => {
+router.get("/queue", verifyToken, adminOrMod, async (req, res) => {
   try {
     const { status, category, urgency, area, search, sort, page = 1, limit = 5, type = 'all' } = req.query;
     let query = { isHidden: false };
@@ -566,12 +588,12 @@ router.get("/queue", verifyToken, adminOnly, async (req, res) => {
 });
 
 // PATCH /api/admin/issues/:id/approve
-router.patch("/issues/:id/approve", verifyToken, adminOnly, async (req, res) => {
+router.patch("/issues/:id/approve", verifyToken, adminOrMod, async (req, res) => {
   try {
     const issue = await Issue.findById(req.params.id);
     if (!issue) return res.status(404).json({ error: "Not found" });
     
-    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: "admin" };
+    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     
     const previousValue = issue.approvalStatus;
     issue.approvalStatus = "approved";
@@ -580,6 +602,7 @@ router.patch("/issues/:id/approve", verifyToken, adminOnly, async (req, res) => 
     issue.approvedBy = req.user.email;
     
     await issue.save();
+    safely("triage", () => markTriaged(issue._id, req.user.email));
     
     // Log new_issue feed event
     try {
@@ -630,7 +653,7 @@ router.patch("/issues/:id/approve", verifyToken, adminOnly, async (req, res) => 
 });
 
 // PATCH /api/admin/issues/:id/reject
-router.patch("/issues/:id/reject", verifyToken, adminOnly, async (req, res) => {
+router.patch("/issues/:id/reject", verifyToken, adminOrMod, async (req, res) => {
   try {
     const { reason } = req.body;
     if (!reason) return res.status(400).json({ error: "Reason required" });
@@ -638,7 +661,7 @@ router.patch("/issues/:id/reject", verifyToken, adminOnly, async (req, res) => {
     const issue = await Issue.findById(req.params.id);
     if (!issue) return res.status(404).json({ error: "Not found" });
     
-    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: "admin" };
+    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     
     const previousValue = issue.approvalStatus;
     issue.approvalStatus = "rejected";
@@ -648,6 +671,7 @@ router.patch("/issues/:id/reject", verifyToken, adminOnly, async (req, res) => {
     issue.rejectReason = reason;
     
     await issue.save();
+    safely("sync", () => syncTicketStatus(issue._id, "rejected", { by: req.user.email, note: issue.rejectReason || undefined }));
     await logAudit({ action: "ISSUE_REJECTED", targetType: "issue", targetId: issue._id, performedBy: adminInfo, note: `Rejected issue: ${reason}`, oldValue: previousValue, newValue: "rejected" });
     
     if (issue.submittedBy && issue.submittedBy.email) {
@@ -667,7 +691,7 @@ router.patch("/issues/:id/reject", verifyToken, adminOnly, async (req, res) => {
 });
 
 // PATCH /api/admin/cleanup-events/:id/approve
-router.patch("/cleanup-events/:id/approve", verifyToken, adminOnly, async (req, res) => {
+router.patch("/cleanup-events/:id/approve", verifyToken, adminOrMod, async (req, res) => {
   try {
     const event = await CleanupEvent.findByIdAndUpdate(
       req.params.id,
@@ -713,7 +737,7 @@ router.patch("/cleanup-events/:id/approve", verifyToken, adminOnly, async (req, 
       link:       `/cleanup-events/${event._id}`,
     });
 
-    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: "admin" };
+    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     await logAudit({ performedBy: adminInfo, action: 'CLEANUP_EVENT_APPROVED', targetId: event._id, targetType: 'cleanup_event' });
 
     res.json({ success: true });
@@ -723,7 +747,7 @@ router.patch("/cleanup-events/:id/approve", verifyToken, adminOnly, async (req, 
 });
 
 // PATCH /api/admin/cleanup-events/:id/reject
-router.patch("/cleanup-events/:id/reject", verifyToken, adminOnly, async (req, res) => {
+router.patch("/cleanup-events/:id/reject", verifyToken, adminOrMod, async (req, res) => {
   try {
     const { reason } = req.body;
     const event = await CleanupEvent.findByIdAndUpdate(req.params.id, {
@@ -732,7 +756,7 @@ router.patch("/cleanup-events/:id/reject", verifyToken, adminOnly, async (req, r
 
     if (!event) return res.status(404).json({ error: "Not found" });
 
-    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: "admin" };
+    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     await logAudit({ performedBy: adminInfo, action: 'CLEANUP_EVENT_REJECTED', targetId: event._id, targetType: 'cleanup_event' });
 
     res.json({ success: true });
@@ -742,7 +766,7 @@ router.patch("/cleanup-events/:id/reject", verifyToken, adminOnly, async (req, r
 });
 
 // PATCH /api/admin/issues/:id/status
-router.patch("/issues/:id/status", verifyToken, adminOnly, async (req, res) => {
+router.patch("/issues/:id/status", verifyToken, adminOrMod, async (req, res) => {
   try {
     const { status } = req.body;
     const issue = await Issue.findById(req.params.id);
@@ -754,8 +778,9 @@ router.patch("/issues/:id/status", verifyToken, adminOnly, async (req, res) => {
     issue.statusChangedBy = req.user.email;
     
     await issue.save();
+    safely("sync", () => syncTicketStatus(issue._id, status, { by: req.user.email }));
     
-    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: "admin" };
+    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     await logAudit({ action: "CHANGE_STATUS", targetType: "issue", targetId: issue._id, performedBy: adminInfo, note: `Changed status to ${status}`, oldValue: previousValue, newValue: status });
     
     res.json({ success: true });
@@ -777,7 +802,7 @@ router.get("/issues/:id/reveal-identity", verifyToken, adminOnly, async (req, re
     
     await issue.save();
     
-    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: "admin" };
+    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     await logAudit({ action: "REVEAL_IDENTITY", targetType: "issue", targetId: issue._id, performedBy: adminInfo, note: "Revealed anonymous poster identity" });
     
     res.json(issue.submittedBy);
@@ -787,7 +812,7 @@ router.get("/issues/:id/reveal-identity", verifyToken, adminOnly, async (req, re
 });
 
 // PATCH /api/admin/issues/:id/assign
-router.patch("/issues/:id/assign", verifyToken, adminOnly, async (req, res) => {
+router.patch("/issues/:id/assign", verifyToken, adminOrMod, async (req, res) => {
   try {
     const { email, name, type, deadline, adminNote } = req.body;
     const issue = await Issue.findById(req.params.id);
@@ -798,7 +823,7 @@ router.patch("/issues/:id/assign", verifyToken, adminOnly, async (req, res) => {
     if (adminNote) issue.adminNotes = adminNote;
     await issue.save();
     
-    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: "admin" };
+    const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     await logAudit({ action: "ASSIGN_ISSUE", targetType: "issue", targetId: issue._id, performedBy: adminInfo, note: `Assigned to ${name} (${type})`, newValue: "action_taken" });
 
     if (issue.submittedBy && issue.submittedBy.email) {
@@ -815,7 +840,7 @@ router.patch("/issues/:id/assign", verifyToken, adminOnly, async (req, res) => {
 });
 
 // GET /api/admin/forum
-router.get('/forum', verifyToken, adminOnly, async (req, res) => {
+router.get('/forum', verifyToken, adminOrMod, async (req, res) => {
   const { category, search, page = 1, limit = 20 } = req.query;
   const col   = getCollection('forum');
   const query = {};
@@ -835,7 +860,7 @@ router.get('/forum', verifyToken, adminOnly, async (req, res) => {
 });
 
 // PATCH /api/admin/forum/:id/pin
-router.patch('/forum/:id/pin', verifyToken, adminOnly, async (req, res) => {
+router.patch('/forum/:id/pin', verifyToken, adminOrMod, async (req, res) => {
   const col    = getCollection('forum');
   const thread = await col.findOne({ _id: new ObjectId(req.params.id) });
   const newPinState = !thread.isPinned;
@@ -853,7 +878,7 @@ router.patch('/forum/:id/pin', verifyToken, adminOnly, async (req, res) => {
 });
 
 // PATCH /api/admin/forum/:id/lock
-router.patch('/forum/:id/lock', verifyToken, adminOnly, async (req, res) => {
+router.patch('/forum/:id/lock', verifyToken, adminOrMod, async (req, res) => {
   const col    = getCollection('forum');
   const thread = await col.findOne({ _id: new ObjectId(req.params.id) });
   const newLockState = !thread.isLocked;
@@ -870,7 +895,7 @@ router.patch('/forum/:id/lock', verifyToken, adminOnly, async (req, res) => {
 });
 
 // DELETE /api/admin/forum/:id
-router.delete('/forum/:id', verifyToken, adminOnly, async (req, res) => {
+router.delete('/forum/:id', verifyToken, adminOrMod, async (req, res) => {
   const col = getCollection('forum');
   await col.deleteOne({ _id: new ObjectId(req.params.id) });
   await logAudit({ performedBy: req.user.email, action: 'POST_DELETED', targetId: req.params.id, targetType: 'forum' });
@@ -937,7 +962,7 @@ router.patch('/ngos/:id/reject', verifyToken, adminOnly, async (req, res) => {
 });
 
 // GET /api/admin/animals/pending-rescues
-router.get('/animals/pending-rescues', verifyToken, adminOnly, async (req, res) => {
+router.get('/animals/pending-rescues', verifyToken, adminOrMod, async (req, res) => {
   try {
     const col = getCollection('animals');
     const animals = await col.find({ rescueVerificationStatus: 'pending' }).toArray();
