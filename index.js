@@ -98,6 +98,10 @@ app.use(cors({
   credentials: true
 }));
 
+app.disable("x-powered-by");
+// gzip API responses (feeds and lists shrink ~75%)
+app.use(require("compression")());
+
 // stripe webhook needs raw body, must load before json parser
 const paymentRoutes = require("./routes/payment");
 app.post("/api/payment/stripe-webhook", express.raw({ type: 'application/json' }), paymentRoutes.stripeWebhookHandler);
@@ -106,14 +110,32 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 const path = require("path");
+const { verifyToken } = require("./middleware/auth");
+const { adminOnly } = require("./middleware/adminOnly");
 const fs = require("fs");
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
+  // Never let a browser guess a different type for an uploaded file
+  setHeaders: (res) => res.setHeader("X-Content-Type-Options", "nosniff"),
+}));
 
-app.post("/upload", async (req, res) => {
+// Notice attachments (admin only). Files are served from this API's own
+// origin, so only document/image types are accepted: an uploaded .html or
+// .svg could otherwise run script as us.
+const UPLOAD_EXTENSIONS = new Set([".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt"]);
+const UPLOAD_MAX_BYTES = 15 * 1024 * 1024;
+
+app.post("/upload", verifyToken, adminOnly, async (req, res) => {
   try {
     const { name, base64 } = req.body;
     if (!name || !base64) {
       return res.status(400).json({ error: "Missing name or base64 data" });
+    }
+    const ext = path.extname(String(name)).toLowerCase();
+    if (!UPLOAD_EXTENSIONS.has(ext)) {
+      return res.status(400).json({ error: `Files of type ${ext || "(none)"} can't be attached. Use PDF, an image or an office document.` });
+    }
+    if (Buffer.byteLength(base64, "base64") > UPLOAD_MAX_BYTES) {
+      return res.status(413).json({ error: "File is larger than 15 MB." });
     }
     const uploadsDir = path.join(__dirname, "uploads");
     if (!fs.existsSync(uploadsDir)) {
@@ -131,7 +153,6 @@ app.post("/upload", async (req, res) => {
   }
 });
 
-const { verifyToken } = require("./middleware/auth");
 
 const { connectDB } = require("./config/db");
 
@@ -186,6 +207,29 @@ app.use("/gallery", galleryRoutes);
 
 app.use("/issues/:id/comments", commentsRoutes);
 app.use("/comments", singleCommentRoutes);
+
+// Unknown routes get JSON, not Express's HTML page
+app.use((req, res) => {
+  res.status(404).json({ error: `No route for ${req.method} ${req.path}` });
+});
+
+// Last-resort error handler: always JSON, never a stack trace to the client
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err?.name === "BSONError" || err?.name === "CastError") {
+    return res.status(400).json({ error: "That id isn't valid." });
+  }
+  if (err?.type === "entity.too.large") {
+    return res.status(413).json({ error: "Request body is too large." });
+  }
+  if (typeof err?.message === "string" && err.message.includes("not allowed by CORS")) {
+    return res.status(403).json({ error: err.message });
+  }
+  const status = err?.status || err?.statusCode || 500;
+  if (status >= 500) console.error(`${req.method} ${req.originalUrl} failed:`, err);
+  res.status(status).json({ error: status >= 500 ? "Something went wrong on our side. Please try again." : err.message });
+});
 
 async function startServer() {
   try {
