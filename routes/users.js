@@ -1,5 +1,8 @@
 const express = require("express");
 const router = express.Router();
+
+// Fields a user may change on their own profile (see POST /users)
+const PROFILE_FIELDS = ["name", "photoURL", "coverPhoto", "area", "bio", "streetAddress", "apartmentNumber", "phone"];
 const { verifyToken } = require("../middleware/auth");
 const { getCollection } = require("../config/db");
 const { regenerateUserCredits } = require("../utils/creditHelper");
@@ -39,11 +42,18 @@ router.post("/", verifyToken, async (req, res) => {
   }
 
   const query = { email: email };
-  
+
+  // Only profile fields can be set here. Spreading the whole body let anyone
+  // send { role: "admin" } (or points, credits, isDemo) and promote themselves.
+  const profile = {};
+  for (const field of PROFILE_FIELDS) {
+    if (userData[field] !== undefined) profile[field] = userData[field];
+  }
+
   // Set default role to "guest" if not provided/existing
   const updateDoc = {
     $set: {
-      ...userData,
+      ...profile,
       email: tokenEmail,
       uid: req.user.uid,
     },

@@ -1,5 +1,9 @@
 const express = require("express");
+const { isStaff } = require('../utils/roles');
 const router = express.Router();
+const { createTicketForIssue, syncTicketStatus, updateTicket, safely } = require("../services/tickets");
+
+const REPORTER_FIELDS = ['title', 'description', 'category', 'customFlair', 'location', 'area', 'coordinates', 'images', 'incidentDate', 'isAnonymous', 'crowdfunding', 'urgency', 'isPremiumFeature'];
 const { verifyToken } = require("../middleware/auth");
 const { adminOnly } = require("../middleware/adminOnly");
 const { memberOnly } = require("../middleware/memberOnly");
@@ -189,6 +193,7 @@ router.get("/:id", async (req, res) => {
       issue.status = 'open';
       issue.assignedTo = null;
       await issue.save();
+      safely("sync", () => syncTicketStatus(issue._id, "open", { by: "system", note: "Claim expired" }));
       // Optionally notify reporter
     }
 
@@ -203,8 +208,13 @@ router.get("/:id", async (req, res) => {
 router.post("/", verifyToken, creditCheck("issues"), async (req, res) => {
   try {
     // Extract req.user provided by verifyToken (from firebase)
+    // Only fields a reporter may set; status, approval, votes etc. stay server-controlled
+    const allowed = {};
+    for (const field of REPORTER_FIELDS) {
+      if (req.body[field] !== undefined) allowed[field] = req.body[field];
+    }
     const newIssue = new Issue({
-      ...req.body,
+      ...allowed,
       submittedBy: {
         userId: req.user.uid,
         name: req.user.name || req.body.submittedBy?.name || "User",
@@ -215,7 +225,18 @@ router.post("/", verifyToken, creditCheck("issues"), async (req, res) => {
     });
 
     await newIssue.save();
-    res.status(201).json({ success: true, issueId: newIssue._id, creditInfo: req.creditInfo });
+
+    // Every report gets a trackable ticket. A ticket failure must not lose the report.
+    let ticketCode = null;
+    try {
+      const ticket = await createTicketForIssue(newIssue, { by: req.user.email });
+      ticketCode = ticket.code;
+      await Issue.updateOne({ _id: newIssue._id }, { $set: { ticketCode } });
+    } catch (err) {
+      console.error("[tickets] create failed for issue", String(newIssue._id), err.message);
+    }
+
+    res.status(201).json({ success: true, issueId: newIssue._id, ticketCode, creditInfo: req.creditInfo });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -263,6 +284,7 @@ router.patch("/:id", verifyToken, async (req, res) => {
     }
 
     await issue.save();
+    safely("sync", () => syncTicketStatus(issue._id, issue.status, { by: req.user.email }));
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -340,6 +362,7 @@ router.post("/:id/proofs", verifyToken, memberOnly, async (req, res) => {
     issue.status = "pending_verification";
     issue.statusChangedAt = new Date();
     await issue.save();
+    safely("sync", () => syncTicketStatus(issue._id, "pending_verification", { by: req.user.email }));
 
     // Notify reporter
     if (issue.submittedBy?.email) {
@@ -480,6 +503,7 @@ router.post("/:id/verify", verifyToken, memberOnly, async (req, res) => {
     }
 
     await issue.save();
+    if (solved) safely("sync", () => syncTicketStatus(issue._id, "solved", { by: "community", note: "Verified by 3 neighbours" }));
     await updateStreak(req.user.email);
     res.json({
       success: true,
@@ -645,6 +669,10 @@ router.post('/:id/claim', verifyToken, memberOnly, async (req, res) => {
         message: 'This issue is no longer available for claiming.',
       });
     }
+    safely("sync", async () => {
+      await syncTicketStatus(updated._id, "action_taken", { by: email, note: "Claimed" });
+      if (updated.ticketCode) await updateTicket(updated.ticketCode, { assigneeEmail: email }, email);
+    });
 
     // Notify the original reporter
     if (updated.submittedBy?.email) {
@@ -674,7 +702,7 @@ router.post('/:id/unclaim', verifyToken, async (req, res) => {
     if (!issue) return res.status(404).json({ message: 'Issue not found.' });
 
     const isResolver = issue.assignedTo?.email === req.user.email;
-    const isAdmin    = req.user.role === 'admin';
+    const isAdmin    = isStaff(req.user.role);
 
     if (!isResolver && !isAdmin) {
       return res.status(403).json({ message: 'Only the current resolver or an admin can unclaim.' });
@@ -689,6 +717,7 @@ router.post('/:id/unclaim', verifyToken, async (req, res) => {
     issue.status     = 'open';
     issue.assignedTo = null;
     await issue.save();
+    safely("sync", () => syncTicketStatus(issue._id, "open", { by: req.user.email, note: "Released by resolver" }));
 
     if (issue.submittedBy?.email) {
       await createNotification({

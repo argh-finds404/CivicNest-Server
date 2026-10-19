@@ -1,4 +1,5 @@
 const express = require("express");
+const { isStaff } = require("../utils/roles");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const { memberOnly } = require("../middleware/memberOnly");
@@ -72,7 +73,7 @@ router.get("/", async (req, res) => {
     }
 
     // Role-based visibility logic for pending polls
-    const isAdmin = currentUser && currentUser.role === 'admin';
+    const isAdmin = currentUser && isStaff(currentUser.role);
     if (!isAdmin) {
       const userEmail = currentUser ? currentUser.email : null;
       if (status === 'pending') {
@@ -152,7 +153,7 @@ router.post("/", verifyToken, memberOnly, async (req, res) => {
       }
     }
 
-    const isUserAdmin = req.user.role === 'admin';
+    const isUserAdmin = isStaff(req.user.role);
     const status = isUserAdmin ? 'active' : 'pending';
 
     const col = getCollection("polls");
@@ -397,9 +398,9 @@ router.patch("/:id", verifyToken, async (req, res) => {
 // Approve poll (protected - admin/moderator only)
 router.patch("/:id/approve", verifyToken, async (req, res) => {
   try {
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = isStaff(req.user.role);
     if (!isAdmin) {
-      return res.status(403).json({ message: 'Access denied: Only admins can approve polls' });
+      return res.status(403).json({ message: 'Access denied: only moderators and admins can approve polls' });
     }
 
     const col = getCollection("polls");
@@ -449,7 +450,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
       return res.status(404).json({ message: 'Poll not found' });
     }
 
-    if (poll.createdBy !== req.user.email && req.user.role !== 'admin') {
+    if (poll.createdBy !== req.user.email && !isStaff(req.user.role)) {
       return res.status(403).json({ message: 'Only the creator or admin can delete this poll' });
     }
 
