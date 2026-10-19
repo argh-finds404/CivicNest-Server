@@ -8,8 +8,15 @@ router.post("/", verifyToken, async (req, res) => {
   const contributionsCollection = getCollection("contributions");
   const contribution = {
     ...req.body,
+    // Always the signed-in user: the body can't attribute a contribution to someone else
+    email: req.user.email,
+    contributorEmail: req.user.email,
+    amount: Number(req.body.amount) || 0,
     date: new Date()
   };
+  if (contribution.amount <= 0) {
+    return res.status(400).json({ error: "Amount must be a positive number" });
+  }
   const result = await contributionsCollection.insertOne(contribution);
 
   // Trigger feed event

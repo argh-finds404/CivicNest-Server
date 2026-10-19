@@ -1,4 +1,5 @@
 const express = require('express');
+const { isStaff, atLeast } = require('../utils/roles');
 const router = express.Router();
 const CleanupEvent = require('../models/CleanupEvent');
 const { verifyToken } = require('../middleware/auth');
@@ -396,7 +397,7 @@ router.post('/:id/going', verifyToken, async (req, res) => {
     // Check if user is a member
     const usersCollection = getCollection('users');
     const dbUser = await usersCollection.findOne({ email });
-    if (!dbUser || (dbUser.role !== 'member' && dbUser.role !== 'admin')) {
+    if (!dbUser || !atLeast(dbUser.role, 'member')) {
       return res.status(403).json({ message: 'Only verified members can volunteer for drives.' });
     }
 
@@ -540,7 +541,7 @@ router.get('/:id/attendees', verifyToken, async (req, res) => {
     if (!event) return res.status(404).json({ message: 'Event not found' });
 
     const isOrganizer = event.organizer.email === req.user.email;
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = isStaff(req.user.role);
 
     if (!isOrganizer && !isAdmin) {
       return res.status(403).json({ message: 'Access denied.' });
@@ -605,7 +606,7 @@ router.post('/:id/complete', verifyToken, async (req, res) => {
     if (!event) return res.status(404).json({ message: 'Event not found' });
 
     const isOrganizer = event.organizer.email === req.user.email;
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = isStaff(req.user.role);
 
     if (!isOrganizer && !isAdmin) {
       return res.status(403).json({ message: 'Access denied.' });
@@ -658,7 +659,7 @@ router.post('/:id/cancel', verifyToken, async (req, res) => {
     if (!event) return res.status(404).json({ message: 'Event not found' });
 
     const isOrganizer = event.organizer.email === req.user.email;
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = isStaff(req.user.role);
     if (!isOrganizer && !isAdmin) return res.status(403).json({ message: 'Access denied.' });
 
     event.status = 'cancelled';

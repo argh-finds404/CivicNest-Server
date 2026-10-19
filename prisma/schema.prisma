@@ -1,0 +1,115 @@
+// CivicNest data model (MongoDB via Prisma).
+//
+// Prisma owns the ticketing domain (tickets, counters) and maps the existing
+// `users` collection for roles and reviewer accounts. Other collections are
+// still read and written with the MongoDB driver / Mongoose and are left as is.
+//
+// After changing this file: `npx prisma generate` (runs on `npm install` too).
+// Indexes for `tickets` are also created at startup, so `prisma db push` is
+// optional.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  guest
+  member
+  moderator
+  admin
+}
+
+enum TicketStatus {
+  OPEN // reported, waiting for review
+  TRIAGED // reviewed by staff, accepted
+  IN_PROGRESS // someone is working on it
+  RESOLVED // fixed and verified
+  REJECTED // not actionable (duplicate, spam, out of area)
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+/// One entry in a ticket's history
+type TicketEvent {
+  at   DateTime @default(now())
+  /// created | status | priority | assigned | note
+  type String
+  from String?
+  to   String?
+  by   String?
+  note String?
+}
+
+/// A trackable ticket for every issue report (1:1 with issues._id)
+model Ticket {
+  id            String         @id @default(auto()) @map("_id") @db.ObjectId
+  /// Human-readable code, e.g. CN-2026-000123
+  code          String         @unique
+  number        Int            @unique
+  issueId       String         @unique @db.ObjectId
+  title         String
+  category      String?
+  area          String?
+  reporterEmail String?
+  status        TicketStatus   @default(OPEN)
+  priority      TicketPriority @default(NORMAL)
+  assigneeEmail String?
+  /// When the ticket should be resolved by, from its priority
+  slaDueAt      DateTime?
+  resolvedAt    DateTime?
+  events        TicketEvent[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([status, priority])
+  @@index([reporterEmail])
+  @@index([assigneeEmail])
+  @@map("tickets")
+}
+
+/// Atomic sequences (e.g. _id "ticket" -> last ticket number)
+model Counter {
+  id  String @id @map("_id")
+  seq Int    @default(0)
+
+  @@map("counters")
+}
+
+type UserStreak {
+  current        Int       @default(0)
+  best           Int       @default(0)
+  lastActiveDate DateTime?
+}
+
+/// Existing users collection. Always query with `select`: older documents
+/// carry extra or loosely-typed fields that the app still reads elsewhere.
+model User {
+  id                    String      @id @default(auto()) @map("_id") @db.ObjectId
+  email                 String
+  name                  String?
+  photoURL              String?
+  role                  Role        @default(guest)
+  points                Int?        @default(0)
+  isVolunteer           Boolean?    @default(false)
+  /// Reviewer demo account: can explore everything, can't change roles
+  isDemo                Boolean?    @default(false)
+  /// Same starting values POST /users gives a new sign-up
+  issueCredits          Int?        @default(3)
+  creditRegenTimestamps DateTime[]
+  streak                UserStreak?
+  createdAt             DateTime?   @default(now())
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
