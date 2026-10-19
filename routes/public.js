@@ -1,32 +1,72 @@
 const express = require("express");
 const router = express.Router();
 const { getCollection, client } = require("../config/db");
+const CleanupEvent = require("../models/CleanupEvent");
 
 // GET /public/stats
-// Returns aggregated stats for public display (Press Kit, Home Page)
+// Aggregated public numbers for the home hero, press kit, etc.
+// Also returns a handful of recent public issues and upcoming events so the
+// home page can pin real activity on its neighbourhood map.
+// Cached in memory for 60s: it's hit on every home-page load.
+const STATS_TTL_MS = 60 * 1000;
+let statsCache = { at: 0, payload: null };
+
 router.get("/stats", async (req, res) => {
+  if (statsCache.payload && Date.now() - statsCache.at < STATS_TTL_MS) {
+    return res.json(statsCache.payload);
+  }
   try {
     const usersCollection = getCollection("users");
     const issuesCollection = getCollection("issues");
 
-    // Total active members (could be all users or just those with role="member")
-    // For now we'll count all users as "Active Members" to match the large 15,000+ vibe
-    const totalUsers = await usersCollection.countDocuments();
-    
-    // Issues resolved
-    const solvedIssues = await issuesCollection.countDocuments({ status: "solved", isHidden: false });
-    
-    // Issues reported
-    const totalIssues = await issuesCollection.countDocuments({ isHidden: false });
+    const publicIssue = { isHidden: { $ne: true } };
+    const now = new Date();
+    const upcomingEvent = { approvalStatus: "approved", status: "upcoming", eventDate: { $gte: now } };
 
-    res.json({
+    const [totalUsers, solvedIssues, totalIssues, openIssues, upcomingEvents, recentIssues, nextEvents] = await Promise.all([
+      usersCollection.countDocuments(),
+      issuesCollection.countDocuments({ ...publicIssue, status: "solved" }),
+      issuesCollection.countDocuments(publicIssue),
+      issuesCollection.countDocuments({ ...publicIssue, status: { $in: ["open", "pending", "in_review", "action_taken"] } }),
+      CleanupEvent.countDocuments(upcomingEvent),
+      issuesCollection
+        .find({ ...publicIssue, approvalStatus: "approved" })
+        .project({ title: 1, status: 1, area: 1, category: 1 })
+        .sort({ _id: -1 })
+        .limit(6)
+        .toArray(),
+      CleanupEvent.find(upcomingEvent)
+        .select("title eventDate location.area")
+        .sort({ eventDate: 1 })
+        .limit(3)
+        .lean(),
+    ]);
+
+    const payload = {
       success: true,
       data: {
         activeMembers: totalUsers,
         issuesResolved: solvedIssues,
-        totalIssuesReported: totalIssues
-      }
-    });
+        totalIssuesReported: totalIssues,
+        openIssues,
+        upcomingEvents,
+        recentIssues: recentIssues.map((i) => ({
+          _id: i._id,
+          title: i.title,
+          status: i.status,
+          area: i.area,
+          category: i.category,
+        })),
+        nextEvents: nextEvents.map((e) => ({
+          _id: e._id,
+          title: e.title,
+          eventDate: e.eventDate,
+          area: e.location?.area || "",
+        })),
+      },
+    };
+    statsCache = { at: Date.now(), payload };
+    res.json(payload);
   } catch (error) {
     console.error("Error fetching public stats:", error);
     res.status(500).json({ success: false, error: "Failed to fetch stats" });
