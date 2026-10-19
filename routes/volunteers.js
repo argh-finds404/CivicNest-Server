@@ -469,7 +469,8 @@ router.get("/stats", verifyToken, async (req, res) => {
 // Aggregates open tasks from 3 sources: cleanupEvents + feedingDrives + issues
 // Optional query: ?area=Mirpur&skill=Medical
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/opportunities", verifyToken, async (req, res) => {
+// Public read-only listing: guests browsing the Volunteer Hub must not get a 401
+router.get("/opportunities", async (req, res) => {
   try {
     const { area, skill } = req.query;
 
