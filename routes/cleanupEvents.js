@@ -483,56 +483,8 @@ router.post('/:id/going', verifyToken, async (req, res) => {
   }
 });
 
-// 7. Donate to Event
-router.post('/:id/donate', verifyToken, async (req, res) => {
-  try {
-    const { amount, name, phone, additionalInfo } = req.body;
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ message: 'Invalid donation amount.' });
-    }
-
-    const event = await CleanupEvent.findById(req.params.id);
-    if (!event || !event.fundingEnabled) {
-      return res.status(404).json({ message: 'Event not found or funding not enabled.' });
-    }
-
-    const contributionsDb = getCollection('contributions');
-    await contributionsDb.insertOne({
-      eventId: event._id.toString(),
-      eventTitle: event.title,
-      type: 'cleanup_event',
-      amount: Number(amount),
-      name: name || req.user.displayName,
-      email: req.user.email,
-      phone: phone || '',
-      additionalInfo: additionalInfo || '',
-      date: new Date(),
-    });
-
-    await CleanupEvent.findByIdAndUpdate(
-      req.params.id,
-      { $inc: { fundingRaised: Number(amount) } }
-    );
-
-    if (typeof addPoints === 'function') {
-      await addPoints(req.user.email, 'contribution_made');
-    }
-
-    if (typeof createNotification === 'function') {
-      await createNotification({
-        userId: event.organizer.email,
-        message: `${name || req.user.displayName || 'A kind community member'} donated ৳${amount} to your cleanup event!`,
-        type: 'drive',
-        link: `/cleanup-events/${event._id}`,
-      });
-    }
-
-    res.json({ success: true, message: 'Donation recorded. Thank you!' });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
+// 7. Donations to an event are recorded by the payment flow (routes/payment.js,
+//    donationType 'event') once a payment succeeds, never directly.
 
 // 8. Get Attendees List (Organizer + Admin)
 router.get('/:id/attendees', verifyToken, async (req, res) => {

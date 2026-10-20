@@ -51,6 +51,9 @@ const issueSchema = new mongoose.Schema({
     required: true,
     validate: {
       validator: function(v) {
+        // Only check the date when it is set or changed. Otherwise every later
+        // save (votes, comments, proofs...) fails once an issue is 90 days old.
+        if (!this.isNew && typeof this.isModified === 'function' && !this.isModified('incidentDate')) return true;
         const now = new Date();
         const past90 = new Date();
         past90.setDate(now.getDate() - 90);

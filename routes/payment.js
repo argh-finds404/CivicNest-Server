@@ -16,15 +16,29 @@ const is_live = process.env.SSL_IS_LIVE === 'true';
 const clientBaseUrl = (process.env.CLIENT_BASE_URL || 'http://localhost:5173').trim();
 
 // Helper to process successful donations
+// Claims the transaction first (pending -> processing) so a retried webhook
+// can't apply it twice, and only marks it success once the money is recorded.
+// If recording fails it goes back to pending, so the gateway's retry can finish it.
 async function processDonation(tran_id, gatewayData) {
   const transaction = await PendingTransaction.findOneAndUpdate(
     { tran_id, status: 'pending' },
-    { $set: { status: 'success' } },
+    { $set: { status: 'processing' } },
     { new: false } // returns the document before update
   );
 
   // If it wasn't found or wasn't pending, we've already processed it (or it's invalid)
   if (!transaction) return;
+
+  try {
+    await recordDonation(transaction, tran_id);
+    await PendingTransaction.updateOne({ tran_id }, { $set: { status: 'success' } });
+  } catch (err) {
+    await PendingTransaction.updateOne({ tran_id, status: 'processing' }, { $set: { status: 'pending' } });
+    throw err;
+  }
+}
+
+async function recordDonation(transaction, tran_id) {
 
   const contributionsDb = getCollection('contributions');
   const amount = transaction.amount;
@@ -140,7 +154,8 @@ router.post('/create-stripe-intent', verifyToken, async (req, res) => {
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: parseInt(amount * 100), // Stripe expects minimum units (cents/paisa)
-      currency: 'usd',
+      // Amounts are in taka throughout the app
+      currency: 'bdt',
       metadata: { tran_id, donationType, referenceId, userEmail },
     });
 
@@ -148,7 +163,7 @@ router.post('/create-stripe-intent', verifyToken, async (req, res) => {
       tran_id,
       gateway: 'stripe',
       amount,
-      currency: 'USD',
+      currency: 'BDT',
       donationType,
       referenceId,
       userId: userEmail,
@@ -158,6 +173,11 @@ router.post('/create-stripe-intent', verifyToken, async (req, res) => {
     res.json({ clientSecret: paymentIntent.client_secret });
   } catch (error) {
     console.error('Stripe Intent Error:', error);
+    // Stripe's own checks (e.g. amount below its minimum for card payments) are
+    // the donor's to fix, so pass the message on rather than a server error
+    if (error.type === 'StripeInvalidRequestError') {
+      return res.status(400).json({ message: error.message, error: error.message });
+    }
     res.status(500).json({ error: error.message });
   }
 });

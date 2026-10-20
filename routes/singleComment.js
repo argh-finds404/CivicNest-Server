@@ -3,6 +3,7 @@ const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const Comment = require("../models/Comment");
 const Issue = require("../models/Issue");
+const { isStaff } = require("../utils/roles");
 
 // PATCH /api/comments/:commentId
 router.patch("/:id", verifyToken, async (req, res) => {
@@ -30,10 +31,9 @@ router.delete("/:id", verifyToken, async (req, res) => {
     const comment = await Comment.findById(req.params.id);
     if (!comment) return res.status(404).json({ error: "Comment not found" });
 
-    // Assuming admin check happens here or it's just the owner
-    if (comment.userId !== req.user.uid) {
-        // Here you would check if req.user is an admin to bypass
-        // return res.status(403).json({ error: "Forbidden" });
+    // Only the author, or a moderator / admin, can remove a comment
+    if (comment.userId !== req.user.uid && !isStaff(req.user.role)) {
+      return res.status(403).json({ error: "You can only delete your own comments" });
     }
 
     comment.isDeleted = true;

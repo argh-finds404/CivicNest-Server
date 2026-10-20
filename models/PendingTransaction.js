@@ -5,10 +5,10 @@ const pendingTransactionSchema = new mongoose.Schema({
   gateway: { type: String, required: true, enum: ['stripe', 'sslcommerz'] },
   amount: { type: Number, required: true },
   currency: { type: String, default: 'BDT' },
-  donationType: { type: String, required: true, enum: ['animal', 'event', 'ngo', 'community'] },
+  donationType: { type: String, required: true, enum: ['animal', 'event', 'ngo', 'community', 'issue'] },
   referenceId: { type: mongoose.Schema.Types.ObjectId, required: false },
   userId: { type: String, required: true },
-  status: { type: String, default: 'pending', enum: ['pending', 'success', 'failed', 'cancelled'] },
+  status: { type: String, default: 'pending', enum: ['pending', 'processing', 'success', 'failed', 'cancelled'] },
 }, { timestamps: true });
 
 module.exports = mongoose.model('PendingTransaction', pendingTransactionSchema);

@@ -3,7 +3,19 @@ const { isStaff } = require('../utils/roles');
 const router = express.Router();
 const { createTicketForIssue, syncTicketStatus, updateTicket, safely } = require("../services/tickets");
 
-const REPORTER_FIELDS = ['title', 'description', 'category', 'customFlair', 'location', 'area', 'coordinates', 'images', 'incidentDate', 'isAnonymous', 'crowdfunding', 'urgency', 'isPremiumFeature'];
+const REPORTER_FIELDS = ['title', 'description', 'category', 'customFlair', 'location', 'area', 'coordinates', 'images', 'incidentDate', 'isAnonymous', 'urgency', 'isPremiumFeature'];
+
+// The parts of crowdfunding a reporter may set. Raised amount and escrow state
+// only ever change through confirmed payments and staff actions.
+const CROWDFUNDING_FIELDS = ['enabled', 'targetAmount', 'purpose'];
+const pickCrowdfunding = (body) => {
+  const out = {};
+  if (!body || typeof body !== 'object') return out;
+  for (const key of CROWDFUNDING_FIELDS) {
+    if (body[key] !== undefined) out[key] = body[key];
+  }
+  return out;
+};
 const { verifyToken } = require("../middleware/auth");
 const { adminOnly } = require("../middleware/adminOnly");
 const { memberOnly } = require("../middleware/memberOnly");
@@ -15,14 +27,16 @@ const { creditCheck } = require("../middleware/creditCheck");
 const { updateStreak } = require("../utils/streakHelper");
 
 
-// Strip identity for public viewing of anonymous posts
+// Strip identity for public viewing of anonymous posts. Edit history and the
+// reveal log carry the reporter's email, so they never leave the server here.
 function stripIdentityIfAnonymous(issue) {
-  if (issue.isAnonymous) {
-    const stripped = typeof issue.toObject === 'function' ? issue.toObject() : { ...issue };
+  const stripped = typeof issue.toObject === 'function' ? issue.toObject() : { ...issue };
+  delete stripped.editHistory;
+  delete stripped.identityRevealLog;
+  if (stripped.isAnonymous) {
     stripped.submittedBy = { name: "Anonymous Member", photoURL: "", userId: "hidden", email: "hidden", memberId: "hidden" };
-    return stripped;
   }
-  return issue;
+  return stripped;
 }
 
 function addStaleInfo(issueObj) {
@@ -155,8 +169,8 @@ router.get("/", async (req, res) => {
        combined.sort((a, b) => (b.netScore || 0) - (a.netScore || 0) || new Date(b.submittedAt) - new Date(a.submittedAt));
     } else if (sort === "most_funded") {
        combined.sort((a, b) => {
-         const fundA = a._type === 'cleanup_event' ? (a.fundingRaised || 0) : (a.crowdfunding?.raised || 0);
-         const fundB = b._type === 'cleanup_event' ? (b.fundingRaised || 0) : (b.crowdfunding?.raised || 0);
+         const fundA = a._type === 'cleanup_event' ? (a.fundingRaised || 0) : (a.crowdfunding?.raisedAmount || 0);
+         const fundB = b._type === 'cleanup_event' ? (b.fundingRaised || 0) : (b.crowdfunding?.raisedAmount || 0);
          return fundB - fundA || new Date(b.submittedAt) - new Date(a.submittedAt);
        });
     } else {
@@ -213,6 +227,8 @@ router.post("/", verifyToken, creditCheck("issues"), async (req, res) => {
     for (const field of REPORTER_FIELDS) {
       if (req.body[field] !== undefined) allowed[field] = req.body[field];
     }
+    const crowdfunding = pickCrowdfunding(req.body.crowdfunding);
+    if (Object.keys(crowdfunding).length) allowed.crowdfunding = crowdfunding;
     const newIssue = new Issue({
       ...allowed,
       submittedBy: {
@@ -258,7 +274,7 @@ router.patch("/:id", verifyToken, async (req, res) => {
     const fieldsChanged = [];
     
     // Only process editable fields
-    const editableFields = ['title', 'description', 'category', 'customFlair', 'location', 'area', 'coordinates', 'images', 'incidentDate', 'isAnonymous', 'crowdfunding'];
+    const editableFields = ['title', 'description', 'category', 'customFlair', 'location', 'area', 'coordinates', 'images', 'incidentDate', 'isAnonymous'];
     
     editableFields.forEach(field => {
       if (req.body[field] !== undefined) {
@@ -267,6 +283,15 @@ router.patch("/:id", verifyToken, async (req, res) => {
         fieldsChanged.push(field);
       }
     });
+
+    // Crowdfunding: update only the reporter's settings, field by field, so the
+    // amount raised and escrow state survive the edit
+    const crowdfunding = pickCrowdfunding(req.body.crowdfunding);
+    if (Object.keys(crowdfunding).length) {
+      previousValues.crowdfunding = issue.crowdfunding?.toObject ? issue.crowdfunding.toObject() : issue.crowdfunding;
+      for (const [key, value] of Object.entries(crowdfunding)) issue.set(`crowdfunding.${key}`, value);
+      fieldsChanged.push('crowdfunding');
+    }
 
     issue.editHistory.push({
       editedAt: new Date(),
@@ -375,7 +400,7 @@ router.post("/:id/proofs", verifyToken, memberOnly, async (req, res) => {
       });
     }
 
-    res.json({ success: true, gpsMatch, issue });
+    res.json({ success: true, gpsMatch, issue: stripIdentityIfAnonymous(issue), proofs: issue.resolutionProofs });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -510,6 +535,7 @@ router.post("/:id/verify", verifyToken, memberOnly, async (req, res) => {
       solved,
       pointsEarned: verifierPoints,
       verificationCount: issue.verificationCount,
+      verifications: issue.verifications,
       status: issue.status
     });
   } catch (error) {
@@ -640,20 +666,21 @@ router.post("/:id/witness", verifyToken, async (req, res) => {
 // POST /api/issues/:id/claim
 router.post('/:id/claim', verifyToken, memberOnly, async (req, res) => {
   try {
-    const { displayName, email } = req.user;
+    const { name, email } = req.user;
 
     const updated = await Issue.findOneAndUpdate(
       {
         _id:            req.params.id,
         approvalStatus: 'approved',
         status:         'open',
-        assignedTo:     null,
+        // assignedTo always exists with empty fields, so check who it names
+        'assignedTo.email': null,
       },
       {
         $set: {
           status: 'action_taken',
           assignedTo: {
-            name:       displayName || email,
+            name:       name || email.split('@')[0],
             email:      email,
             type:       'volunteer',
             assignedAt: new Date(),
@@ -688,7 +715,7 @@ router.post('/:id/claim', verifyToken, memberOnly, async (req, res) => {
     // Award small engagement points to claimer
     await addPoints(email, 'issue_claimed');
 
-    res.json({ success: true, issue: updated });
+    res.json({ success: true, issue: stripIdentityIfAnonymous(updated) });
 
   } catch (err) {
     res.status(500).json({ message: err.message });
