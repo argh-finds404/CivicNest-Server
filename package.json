@@ -7,6 +7,7 @@
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "seed:reviewers": "node scripts/seedReviewers.js",
+    "seed:demo": "node scripts/seedDemo.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

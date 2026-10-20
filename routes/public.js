@@ -148,7 +148,7 @@ router.get("/users/:uid", async (req, res) => {
       data: {
         name: user.name,
         photoURL: user.photoURL,
-        coverPhoto: user.coverPhoto || "https://images.unsplash.com/photo-1518005020951-eccb494ad742?q=80&w=2000&auto=format&fit=crop",
+        coverPhoto: user.coverPhoto || "/demo/cleanup-riverbank.svg",
         bio: user.bio || "Dedicated civic member.",
         role: user.role,
         isVolunteer: user.isVolunteer || false,
@@ -416,6 +416,67 @@ router.get("/search", async (req, res) => {
   } catch (error) {
     console.error("Global search error:", error);
     res.status(500).json({ success: false, error: "Failed to search" });
+  }
+});
+
+// GET /public/map
+// Everything with real coordinates for the community map: approved issues,
+// upcoming cleanup drives and animals that still need help. Small fields only,
+// cached for 60s.
+let mapCache = { at: 0, payload: null };
+
+router.get("/map", async (req, res) => {
+  if (mapCache.payload && Date.now() - mapCache.at < STATS_TTL_MS) {
+    return res.json(mapCache.payload);
+  }
+  try {
+    const [issues, events, animals] = await Promise.all([
+      getCollection("issues")
+        .find(
+          { approvalStatus: "approved", isHidden: { $ne: true }, "coordinates.lat": { $type: "number" }, "coordinates.lng": { $type: "number" } },
+          { projection: { title: 1, category: 1, status: 1, urgency: 1, area: 1, coordinates: 1, images: { $slice: 1 } } }
+        )
+        .sort({ submittedAt: -1 })
+        .limit(300)
+        .toArray(),
+      CleanupEvent.find(
+        { approvalStatus: "approved", status: { $in: ["upcoming", "ongoing"] }, "location.coordinates.1": { $exists: true } },
+        { title: 1, eventDate: 1, eventTime: 1, goingCount: 1, location: 1, coverImages: { $slice: 1 } }
+      )
+        .sort({ eventDate: 1 })
+        .limit(100)
+        .lean(),
+      getCollection("animals")
+        .find(
+          { approvalStatus: "approved", status: { $in: ["needs-help", "in-treatment"] }, "coordinates.lat": { $type: "number" }, "coordinates.lng": { $type: "number" } },
+          { projection: { animalType: 1, condition: 1, urgency: 1, status: 1, area: 1, location: 1, coordinates: 1, image: 1 } }
+        )
+        .sort({ date: -1 })
+        .limit(100)
+        .toArray(),
+    ]);
+    const payload = {
+      issues: issues.map((i) => ({
+        _id: i._id, title: i.title, category: i.category, status: i.status, urgency: i.urgency, area: i.area,
+        lat: i.coordinates.lat, lng: i.coordinates.lng, image: i.images?.[0] || null,
+      })),
+      events: events
+        .filter((e) => Number.isFinite(e.location?.coordinates?.[0]) && Number.isFinite(e.location?.coordinates?.[1]))
+        .map((e) => ({
+          _id: e._id, title: e.title, eventDate: e.eventDate, eventTime: e.eventTime, goingCount: e.goingCount || 0,
+          area: e.location?.area || e.location?.address, lat: e.location.coordinates[1], lng: e.location.coordinates[0],
+          image: e.coverImages?.[0] || null,
+        })),
+      animals: animals.map((a) => ({
+        _id: a._id, animalType: a.animalType, condition: a.condition, urgency: a.urgency, status: a.status,
+        area: a.area || a.location, lat: a.coordinates.lat, lng: a.coordinates.lng, image: a.image || null,
+      })),
+    };
+    mapCache = { at: Date.now(), payload };
+    res.json(payload);
+  } catch (err) {
+    console.error("Map data failed:", err);
+    res.status(500).json({ error: "Couldn't load the map." });
   }
 });
 

@@ -145,9 +145,10 @@ Reports filed before tickets existed get one at startup.
 | `POST /ai/animal-tip` | Public | First-aid tip for an animal (cached, 40 per IP per day) |
 | `POST /ai/detect-spam` | Signed in | Spam check for posts |
 
-* Uses `gemini-2.5-flash` by default; set `GEMINI_MODEL` to change it. If a model is retired the server switches to `gemini-flash-latest` by itself.
-* Each user has a daily limit.
-* When the AI can't answer, the API returns `502`/`503` with a message the app shows.
+* The key can be set as `GEMINI_API_KEY` (or `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY`).
+* Tries `gemini-2.5-flash` first (`GEMINI_MODEL` overrides it), then other Flash models. A retired model is skipped from then on, and a model that is out of quota or overloaded is rested for 30 seconds. Each request tries at most three models, with a 20-second timeout.
+* **Built-in fallback:** when Gemini can't answer (no key, rejected key, quota, outage) or a user passes their daily Gemini limit, every endpoint still returns a useful answer from `services/aiFallback.js`: a guide in the chat, a keyword-based category and urgency, a first-aid checklist, a letter template, an extractive summary and a simple spam check. Responses carry `source: "gemini"` or `source: "built-in"`.
+* `GET /ai/status` shows whether a key is configured, which model is answering and the last Gemini error. It never shows the key.
 
 ---
 
@@ -169,6 +170,22 @@ Reports filed before tickets existed get one at startup.
 
 `GET /admin/stats` returns live counts, issues by status and category, and donations for the last 7 days.
 
+`GET /public/map` returns everything with real coordinates for the community map: approved issues, upcoming cleanup drives and animals that still need help (cached for 60 seconds).
+
+## Demo content
+
+`services/demoContent.js` creates a lived-in neighbourhood around Dhaka so reviewers see a working app straight away:
+* 10 community members
+* 12 issues at every stage, with tickets, comments, votes, crowdfunding and proofs
+* 5 cleanup drives, 5 animal rescues and 5 lost & found posts
+
+Every record has a fixed id and `isDemo: true`.
+
+* **On startup** the server adds whatever is missing, so reviewers' actions on demo items survive restarts. It also keeps demo dates current: upcoming drives stay in the future, deadlines don't lapse and listings don't expire. Set `DEMO_CONTENT=off` to skip this.
+* **Reset:** `POST /admin/demo-content` (admin, also the **Reset demo content** button in Admin → Users) or `npm run seed:demo` removes the demo records and adds them fresh.
+* Real users' content is never touched.
+* Images are paths like `/demo/issue-pothole.svg`, served by the client from its bundled `public/demo/` folder.
+
 ---
 
 ## Getting started
@@ -178,6 +195,7 @@ npm install            # also runs `prisma generate`
 cp .env.example .env   # fill in the values below
 npm run db:push        # create the Prisma indexes (tickets, counters, users)
 npm run seed:reviewers # optional: create the demo accounts
+npm run seed:demo      # optional: reset the demo content (also added automatically on start)
 npm start              # http://localhost:3000
 ```
 
@@ -186,8 +204,9 @@ npm start              # http://localhost:3000
 | `MONGODB_URI` (or `DB_USER` / `DB_PASS`) | MongoDB connection. Prisma uses `DATABASE_URL` if set, otherwise this URI with the `communityDB` database. Prisma on MongoDB needs a replica set; Atlas clusters already are one. |
 | `FIREBASE_PROJECT_ID` + `FIREBASE_CLIENT_EMAIL` + `FIREBASE_PRIVATE_KEY`, or `FIREBASE_SERVICE_ACCOUNT` (JSON string), or `FIREBASE_SERVICE_ACCOUNT_PATH` | Firebase Admin credentials, any one of the three forms |
 | `CLIENT_BASE_URL`, `CLIENT_URL` | Front-end URLs: CORS allow-list; `CLIENT_BASE_URL` is also where payments redirect back to |
-| `GEMINI_API_KEY`, `GEMINI_MODEL` | Gemini key; the model is optional (default `gemini-2.5-flash`) |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | Gemini key (`GOOGLE_API_KEY` also works); the model is optional (default `gemini-2.5-flash`). Without a key the AI features use built-in answers. |
 | `PAYMENT_GATEWAY_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe secret key and webhook secret |
 | `SSL_STORE_ID`, `SSL_STORE_PASSWD`, `SSL_IS_LIVE` | SSLCommerz store |
 | `REVIEWER_PASSWORD` | Optional demo-account password (default `CivicNest@2026`) |
+| `DEMO_CONTENT` | Optional. `off` stops the server adding demo content on start |
 | `PORT` | Defaults to 3000 |

@@ -158,6 +158,7 @@ app.post("/upload", verifyToken, adminOnly, async (req, res) => {
 
 const { connectDB } = require("./config/db");
 const { backfillTickets } = require("./services/tickets");
+const { seedDemoContent } = require("./services/demoContent");
 
 const usersRoutes = require("./routes/users");
 const issuesRoutes = require("./routes/issues");
@@ -251,9 +252,16 @@ async function startServer() {
       tickets.createIndex({ status: 1, priority: 1 }),
       tickets.createIndex({ reporterEmail: 1 }),
     ]).catch((err) => console.error("[tickets] index setup failed:", err.message));
-    setImmediate(() =>
-      backfillTickets(db.collection("issues")).catch((err) => console.error("[tickets] backfill failed:", err.message))
-    );
+    setImmediate(async () => {
+      // Demo content for reviewers (set DEMO_CONTENT=off to skip), then
+      // tickets for any report that doesn't have one yet
+      if (process.env.DEMO_CONTENT !== "off") {
+        await seedDemoContent(db)
+          .then((added) => console.log("[demo] content ready", added))
+          .catch((err) => console.error("[demo] seeding failed:", err.message));
+      }
+      await backfillTickets(db.collection("issues")).catch((err) => console.error("[tickets] backfill failed:", err.message));
+    });
     // Animal reports created before status was set on create count as needing help
     db.collection("animals")
       .updateMany({ status: { $exists: false } }, { $set: { status: "needs-help" } })

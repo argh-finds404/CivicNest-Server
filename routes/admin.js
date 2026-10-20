@@ -155,6 +155,28 @@ router.post("/reviewer-accounts", verifyToken, adminOnly, async (req, res) => {
   }
 });
 
+// POST /admin/demo-content — reset the demo neighbourhood (demo records only;
+// real user content is never touched)
+router.post("/demo-content", verifyToken, adminOnly, async (req, res) => {
+  try {
+    const { seedDemoContent } = require("../services/demoContent");
+    const added = await seedDemoContent(req.app.locals.db, { reset: true });
+    const me = await getCollection("users").findOne({ email: req.user.email }, { projection: { _id: 1 } });
+    if (me) await logAudit({
+      performedBy: { email: req.user.email, name: req.user.name },
+      actorRole: req.user.role,
+      action: "RESET_DEMO_CONTENT",
+      targetType: "user",
+      targetId: me._id,
+      newValue: JSON.stringify(added),
+    });
+    res.json({ success: true, added });
+  } catch (err) {
+    console.error("Demo content reset failed:", err);
+    res.status(500).json({ error: "Couldn't reset the demo content." });
+  }
+});
+
 // Get all membership requests
 router.get("/membership", verifyToken, adminOnly, async (req, res) => {
   const membershipCollection = getCollection("membershipRequests");
