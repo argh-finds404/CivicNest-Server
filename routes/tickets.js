@@ -8,13 +8,7 @@ const { getCollection } = require("../config/db");
 const { isStaff } = require("../utils/roles");
 const { updateTicket, TICKET_STATUSES, TICKET_PRIORITIES } = require("../services/tickets");
 
-const ISSUE_STATUS_FROM_TICKET = {
-  OPEN: "open",
-  TRIAGED: "in_review",
-  IN_PROGRESS: "action_taken",
-  RESOLVED: "solved",
-  REJECTED: "rejected",
-};
+const DAY = 24 * 60 * 60 * 1000;
 const CODE_RE = /^CN-\d{4}-\d{6}$/;
 
 // GET /tickets/mine — tickets for reports I filed
@@ -96,17 +90,57 @@ router.patch("/:code", verifyToken, adminOrMod, async (req, res) => {
     return res.status(400).json({ error: "assigneeEmail must be an email address" });
   }
 
+  const existing = await prisma.ticket.findUnique({ where: { code }, select: { issueId: true, assigneeEmail: true } });
+  if (!existing) return res.status(404).json({ error: "No ticket with that code." });
+  const issues = getCollection("issues");
+  const issue = await issues.findOne({ _id: new ObjectId(existing.issueId) });
+
+  // Work out what the issue itself should become, so it never lands in a state
+  // nobody can move on from (e.g. "in progress" with no one assigned)
+  let issueUpdate = null;
+  const stamp = { statusChangedAt: new Date(), statusChangedBy: req.user.email };
+  if (status && issue) {
+    const assignee = assigneeEmail || issue.assignedTo?.email || existing.assigneeEmail;
+    if (status === "IN_PROGRESS") {
+      if (!assignee) {
+        return res.status(400).json({ error: "Assign someone before marking this ticket in progress." });
+      }
+      issueUpdate = { $set: { ...stamp, status: "action_taken" } };
+      if (!issue.assignedTo?.email) {
+        issueUpdate.$set.assignedTo = { email: assignee, name: assignee.split("@")[0], type: "admin", assignedAt: new Date(), deadline: new Date(Date.now() + 7 * DAY), adminNote: null };
+      }
+    } else if (status === "OPEN") {
+      // Back in the pool: anyone can claim it again
+      issueUpdate = { $set: { ...stamp, status: "open", assignedTo: { email: null, name: null, type: null, assignedAt: null, deadline: null, adminNote: null } } };
+    } else if (status === "TRIAGED") {
+      // Accepted: approved and open for a volunteer to claim
+      if (issue.approvalStatus === "pending_review") {
+        return res.status(400).json({ error: "Approve this report from the issue queue first." });
+      }
+      issueUpdate = { $set: { ...stamp, status: issue.assignedTo?.email ? "action_taken" : "open" } };
+    } else if (status === "RESOLVED") {
+      issueUpdate = { $set: { ...stamp, status: "solved", resolvedAt: new Date() } };
+    } else if (status === "REJECTED") {
+      issueUpdate = { $set: { ...stamp, status: "rejected", approvalStatus: "rejected", rejectedAt: new Date(), rejectedBy: req.user.email } };
+    }
+  }
+
   const ticket = await updateTicket(code, { status, priority, assigneeEmail, note }, req.user.email);
   if (!ticket) return res.status(404).json({ error: "No ticket with that code." });
 
-  // Keep the issue's own status in step with the ticket
-  if (status) {
-    await getCollection("issues").updateOne(
-      { _id: new ObjectId(ticket.issueId) },
-      { $set: { status: ISSUE_STATUS_FROM_TICKET[status], statusChangedAt: new Date(), statusChangedBy: req.user.email } }
-    );
+  if (issueUpdate) {
+    await issues.updateOne({ _id: issue._id }, issueUpdate);
+    const newStatus = issueUpdate.$set.status;
     const io = req.app.get("io");
-    if (io) io.emit("issueStatusUpdated", { issueId: ticket.issueId, status: ISSUE_STATUS_FROM_TICKET[status] });
+    if (io) io.emit("issueStatusUpdated", { issueId: ticket.issueId, status: newStatus });
+    if (status === "RESOLVED" && issue.submittedBy?.email) {
+      try {
+        const { createNotification } = require("../utils/notificationHelper");
+        await createNotification({ userId: issue.submittedBy.userId, email: issue.submittedBy.email, message: `Good news: "${issue.title}" has been marked resolved.`, type: "info", link: `/tickets/${code}` });
+      } catch (err) {
+        console.error("[tickets] resolve notification failed:", err.message);
+      }
+    }
   }
 
   res.json({ ticket });

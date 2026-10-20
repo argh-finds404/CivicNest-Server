@@ -4,6 +4,8 @@ const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 const app = express();
+// Render (and most hosts) sit behind one proxy; use the real client IP for rate limits
+app.set("trust proxy", 1);
 
 const allowedOrigins = [
   "http://localhost:5173",
