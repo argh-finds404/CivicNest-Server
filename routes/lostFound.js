@@ -8,6 +8,15 @@ const { ObjectId } = require("mongodb");
 const { createFeedEvent } = require("../utils/feedHelper");
 const { addPoints } = require("../utils/pointsHelper");
 
+const LISTING_DAYS = 30;
+const isExpired = (item) => item.expiresAt && new Date(item.expiresAt) < new Date();
+
+// A malformed id can't match a listing: answer 404 instead of a server error
+router.param("id", (req, res, next, id) => {
+  if (!ObjectId.isValid(id)) return res.status(404).json({ message: "Listing not found." });
+  next();
+});
+
 // Get stats for lost & found banner
 router.get("/stats", async (req, res) => {
   try {
@@ -43,6 +52,9 @@ router.post('/:id/found-report', verifyToken, async (req, res) => {
 
     if (!item || item.status !== 'open') {
       return res.status(400).json({ message: 'Item listing is not open.' });
+    }
+    if (isExpired(item)) {
+      return res.status(400).json({ message: 'This listing has expired.' });
     }
     if (item.type !== 'lost') {
       return res.status(400).json({ message: 'Found reports can only be submitted for lost listings.' });
@@ -108,6 +120,9 @@ router.post('/:id/claim', verifyToken, async (req, res) => {
 
     if (!item || item.status !== 'open') {
       return res.status(400).json({ message: 'Item is not available for claiming.' });
+    }
+    if (isExpired(item)) {
+      return res.status(400).json({ message: 'This listing has expired.' });
     }
     if (item.type !== 'found') {
       return res.status(400).json({ message: 'Claims can only be submitted for found listings.' });
@@ -247,12 +262,22 @@ router.post('/:id/reunite', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Only the original poster can mark this as reunited.' });
     }
 
-    // Determine action-taker (finder or owner claiming item)
+    if (item.status !== 'open') {
+      return res.status(400).json({ message: 'This listing is already closed.' });
+    }
+
+    // The finder (lost items) or owner (found items) being credited must be
+    // someone who actually submitted, and whose submission wasn't rejected or
+    // flagged. Marking reunited without naming anyone credits nobody.
+    const submissions = (item.type === 'lost' ? item.foundReports : item.claims) || [];
+    const requested = item.type === 'lost' ? req.body.finderEmail : req.body.claimantEmail;
     let actionTaker = null;
-    if (item.type === 'lost') {
-      actionTaker = req.body.finderEmail || (item.foundReports && item.foundReports[0]?.email);
-    } else {
-      actionTaker = req.body.claimantEmail || (item.claims && item.claims[0]?.email);
+    if (requested) {
+      const match = submissions.find((s) => s.email === requested && s.status !== 'rejected' && !s.isSuspicious);
+      if (!match) {
+        return res.status(400).json({ message: 'That person has no open submission on this listing.' });
+      }
+      actionTaker = match.email;
     }
 
     const updateFields = { status: 'reunited', reunitedAt: new Date() };
@@ -260,10 +285,15 @@ router.post('/:id/reunite', verifyToken, async (req, res) => {
       updateFields.claimedBy = actionTaker;
     }
 
-    await col.updateOne(
-      { _id: new ObjectId(req.params.id) },
-      { $set: updateFields }
+    // Only one request can close the listing, so points and rewards are paid once.
+    // A reunited listing stays up as a success story, so it no longer expires.
+    const closed = await col.updateOne(
+      { _id: new ObjectId(req.params.id), status: 'open' },
+      { $set: updateFields, $unset: { expiresAt: "" } }
     );
+    if (closed.modifiedCount !== 1) {
+      return res.status(409).json({ message: 'This listing is already closed.' });
+    }
 
     // Award 20 points to the poster
     await addPoints(itemReporter, 'lostfound_reunited');
@@ -448,15 +478,42 @@ router.get("/:id", async (req, res) => {
 });
 
 // Add new lost/found item (Protected)
+const POST_FIELDS = ["type", "category", "itemName", "description", "location", "area", "coordinates", "dateLostFound", "image", "reward", "contactInfo"];
+
 router.post("/", verifyToken, creditCheck("lostFound"), async (req, res) => {
-  const lostFoundCollection = getCollection("lostFound");
-  const item = {
-    ...req.body,
-    reporter: req.user.email,
-    date: new Date()
-  };
-  const result = await lostFoundCollection.insertOne(item);
-  res.send(result);
+  try {
+    if (!["lost", "found"].includes(req.body.type)) {
+      return res.status(400).json({ message: "Type must be lost or found." });
+    }
+    if (!String(req.body.itemName || "").trim()) {
+      return res.status(400).json({ message: "Item name is required." });
+    }
+    // Only what a poster describes; status, claims and expiry are set here
+    const item = {};
+    for (const field of POST_FIELDS) {
+      if (req.body[field] !== undefined) item[field] = req.body[field];
+    }
+    const reward = Number(item.reward);
+    item.reward = item.type === "lost" && Number.isFinite(reward) && reward > 0 ? reward : 0;
+    if (item.dateLostFound) item.dateLostFound = new Date(item.dateLostFound);
+
+    const now = new Date();
+    Object.assign(item, {
+      reporter: req.user.email,
+      status: "open",
+      date: now,
+      // A real Date, so the expiry warning and the TTL index both work
+      expiresAt: new Date(now.getTime() + LISTING_DAYS * 24 * 60 * 60 * 1000),
+      notifiedExpiry: false,
+      claims: [],
+      foundReports: [],
+    });
+    const result = await getCollection("lostFound").insertOne(item);
+    res.send(result);
+  } catch (err) {
+    console.error("Error creating lost/found item:", err);
+    res.status(500).json({ message: "Failed to post the item." });
+  }
 });
 
 module.exports = router;

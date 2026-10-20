@@ -75,7 +75,10 @@ router.post('/:id/volunteer', verifyToken, async (req, res) => {
 // PATCH /api/animals/:id/status — mark rescued/adopted/needs-help
 router.patch('/:id/status', verifyToken, async (req, res) => {
   try {
-    const { status, proofImageUrl, note, verifiedVolunteers } = req.body;
+    const { status, verifiedVolunteers } = req.body;
+    // The details page sends proofUrl / updateNote; older callers send proofImageUrl / note
+    const proofImageUrl = req.body.proofImageUrl || req.body.proofUrl || null;
+    const note = req.body.note || req.body.updateNote || '';
     const valid = ['in-treatment', 'rescued', 'adopted', 'needs-help'];
     if (!valid.includes(status)) return res.status(400).json({ message: 'Invalid status.' });
 
@@ -88,13 +91,17 @@ router.patch('/:id/status', verifyToken, async (req, res) => {
     }
 
     const update = { $set: { status, updatedAt: new Date() } };
+    if (note) update.$set.updateNote = note;
+    if (proofImageUrl) update.$set.proofUrl = proofImageUrl;
 
     if (status === 'rescued') {
+      // Only people who actually volunteered on this animal can be credited
+      const helpers = new Set((animal.volunteers || []).map((v) => (typeof v === 'string' ? v : v?.email)).filter(Boolean));
       update.$set.rescueVerificationStatus = 'pending';
       update.$set.rescueProof = {
-        imageUrl:    proofImageUrl || null,
-        note:        note || '',
-        verifiedVolunteers: verifiedVolunteers || [],
+        imageUrl:    proofImageUrl,
+        note,
+        verifiedVolunteers: (Array.isArray(verifiedVolunteers) ? verifiedVolunteers : []).filter((email) => helpers.has(email)),
         submittedAt: new Date(),
       };
     } else {
@@ -128,10 +135,15 @@ router.patch('/:id/status', verifyToken, async (req, res) => {
 // Get all animal reports
 router.get("/", async (req, res) => {
   try {
-    const { urgency, status, type, area } = req.query;
+    const { urgency, status, type, area, adoptable } = req.query;
     const query = { approvalStatus: 'approved' };
     if (urgency) query.urgency = urgency;
     if (status) query.status = status;
+    // Same rule as the "adoptable" stat: rescued and marked adoptable
+    if (adoptable === 'true') {
+      query.status = 'rescued';
+      query.adoptable = true;
+    }
     if (type) query.animalType = type;
     if (area) {
       query.$or = [
@@ -174,15 +186,27 @@ router.get("/:id", async (req, res) => {
 // Add new animal report (Protected)
 router.post("/", verifyToken, creditCheck("animals"), async (req, res) => {
   const animalsCollection = getCollection("animals");
+  const ANIMAL_FIELDS = ['animalType', 'urgency', 'condition', 'location', 'area', 'coordinates', 'image', 'contactInfo'];
+  const fields = {};
+  for (const field of ANIMAL_FIELDS) {
+    if (req.body[field] !== undefined) fields[field] = req.body[field];
+  }
+  // "Date spotted" from the form, if it's a real date that isn't in the future
+  const spotted = req.body.date ? new Date(req.body.date) : null;
+  const now = new Date();
   const animal = {
-    ...req.body,
+    ...fields,
+    // New reports need help until someone updates them; this is what the
+    // "Needs Rescue" filter and the urgent count look for
+    status: 'needs-help',
     approvalStatus: 'approved',
     reporter: {
       email: req.user.email,
       name: req.user.name || req.user.displayName || (req.user.email ? req.user.email.split('@')[0] : 'Anonymous'),
       photoURL: req.user.picture || req.user.photoURL || null
     },
-    date: new Date()
+    date: spotted && !Number.isNaN(spotted.getTime()) && spotted <= now ? spotted : now,
+    createdAt: now,
   };
   const result = await animalsCollection.insertOne(animal);
   res.send(result);

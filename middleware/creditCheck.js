@@ -1,4 +1,5 @@
 const { getCollection } = require('../config/db');
+const { isStaff } = require("../utils/roles");
 
 // Per-role limits per content type
 const CREDIT_LIMITS = {
@@ -37,7 +38,7 @@ const CONFIG = {
   },
   lostFound: {
     collection: 'lostFound',
-    emailField: 'reporter.email',
+    emailField: 'reporter', // lost & found stores the reporter's email directly
     dateField: 'date'
   },
   animals: {
@@ -80,8 +81,8 @@ function creditCheck(postType) {
 
       if (!user) return res.status(401).json({ message: 'User not found.' });
 
-      // Admins skip credit check entirely
-      if (user.role === 'admin') return next();
+      // Staff (moderators and admins) skip the credit check entirely
+      if (isStaff(user.role)) return next();
 
       // Determine effective role for limit lookup
       const effectiveRole = user.isVolunteer ? 'volunteer' : (user.role || 'guest');

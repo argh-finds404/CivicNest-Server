@@ -3,6 +3,7 @@ const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { CREDIT_LIMITS, CONFIG } = require('../middleware/creditCheck');
 const { getCollection } = require('../config/db');
+const { isStaff } = require("../utils/roles");
 
 // GET /credits/:type - Get rolling credit details for a post type
 router.get('/:type', verifyToken, async (req, res) => {
@@ -18,7 +19,7 @@ router.get('/:type', verifyToken, async (req, res) => {
     const email = req.user.email;
     const user = await usersCollection.findOne({ email }, { projection: { role: 1, points: 1, isVolunteer: 1 } });
 
-    if (user?.role === 'admin') {
+    if (isStaff(user?.role)) {
       return res.json({ limit: null, used: 0, remaining: null, isAdmin: true });
     }
 
