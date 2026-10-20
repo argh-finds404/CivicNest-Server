@@ -349,9 +349,13 @@ router.post("/:id/proofs", verifyToken, memberOnly, async (req, res) => {
     const issue = await Issue.findById(req.params.id);
     if (!issue) return res.status(404).json({ error: "Not found" });
     
-    // Validate if user is the assigned resolver
-    if (issue.assignedTo?.email !== req.user.email && req.user.role !== 'admin') {
+    // Validate if user is the assigned resolver (or staff)
+    if (issue.assignedTo?.email !== req.user.email && !isStaff(req.user.role)) {
       return res.status(403).json({ error: "Only the assigned resolver can upload proof" });
+    }
+    // Proof belongs to work in progress; it must not reopen a solved or rejected issue
+    if (!['action_taken', 'pending_verification'].includes(issue.status)) {
+      return res.status(400).json({ error: `Proof can't be added while the issue is ${issue.status.replace('_', ' ')}.` });
     }
 
     // GPS validation
@@ -712,8 +716,13 @@ router.post('/:id/claim', verifyToken, memberOnly, async (req, res) => {
       });
     }
 
-    // Award small engagement points to claimer
-    await addPoints(email, 'issue_claimed');
+    // Award small engagement points to claimer, once per person per issue, so
+    // claiming and releasing over and over earns nothing extra
+    const firstClaim = await Issue.updateOne(
+      { _id: updated._id, claimRewardedTo: { $ne: email } },
+      { $addToSet: { claimRewardedTo: email } }
+    );
+    if (firstClaim.modifiedCount === 1) await addPoints(email, 'issue_claimed');
 
     res.json({ success: true, issue: stripIdentityIfAnonymous(updated) });
 
@@ -735,14 +744,22 @@ router.post('/:id/unclaim', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Only the current resolver or an admin can unclaim.' });
     }
 
-    if (issue.resolutionProofs.length > 0) {
+    // Once proof is up, only staff can release the issue (e.g. the proof was
+    // wrong or the resolver vanished). That clears the proof and its
+    // verifications so the next volunteer starts fresh.
+    if (issue.resolutionProofs.length > 0 && !isAdmin) {
       return res.status(400).json({
         message: 'Cannot unclaim after uploading resolution proof. Contact an admin.',
       });
     }
 
     issue.status     = 'open';
-    issue.assignedTo = null;
+    issue.assignedTo = { email: null, name: null, type: null, assignedAt: null, deadline: null, adminNote: null };
+    if (issue.resolutionProofs.length > 0) {
+      issue.resolutionProofs = [];
+      issue.verifications = [];
+      issue.verificationCount = 0;
+    }
     await issue.save();
     safely("sync", () => syncTicketStatus(issue._id, "open", { by: req.user.email, note: "Released by resolver" }));
 

@@ -191,7 +191,8 @@ router.delete("/:id", verifyToken, adminOnly, async (req, res) => {
     // Log audit action
     try {
       await logAudit({
-        performedBy: req.user.email,
+        performedBy: { email: req.user.email, name: req.user.name },
+        actorRole: req.user.role,
         action: "ANNOUNCEMENT_DELETED",
         targetId: req.params.id,
         targetType: "announcement",

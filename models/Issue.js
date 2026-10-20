@@ -106,6 +106,7 @@ const issueSchema = new mongoose.Schema({
   witnessCount: { type: Number, default: 0 },
   verifications: { type: [String], default: [] }, // Array of userIds who verified the resolution
   verificationCount: { type: Number, default: 0 },
+  claimRewardedTo: { type: [String], default: [] }, // who has had claim points for this issue
   
   assignedTo: {
     email: { type: String, default: null },

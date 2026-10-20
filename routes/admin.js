@@ -4,7 +4,7 @@ const { verifyToken } = require("../middleware/auth");
 const { adminOnly } = require("../middleware/adminOnly");
 const { adminOrMod } = require("../middleware/adminOrMod");
 const { ROLES, isValidRole } = require("../utils/roles");
-const { syncTicketStatus, markTriaged, safely } = require("../services/tickets");
+const { syncTicketStatus, markTriaged, updateTicket, safely } = require("../services/tickets");
 const { getCollection } = require("../config/db");
 const { ObjectId } = require("mongodb");
 const Issue = require("../models/Issue");
@@ -59,6 +59,22 @@ router.get("/stats", verifyToken, adminOrMod, async (req, res) => {
     Issues: item.value
   }));
 
+  // Donations over the last 7 days, one point per day (days with none show 0)
+  const since = new Date();
+  since.setUTCHours(0, 0, 0, 0);
+  since.setUTCDate(since.getUTCDate() - 6);
+  const daily = await contributionsCollection.aggregate([
+    { $match: { date: { $gte: since } } },
+    { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } }, amount: { $sum: "$amount" } } }
+  ]).toArray();
+  const byDay = Object.fromEntries(daily.map((d) => [d._id, d.amount]));
+  const transactionTrend = Array.from({ length: 7 }, (_, i) => {
+    const day = new Date(since);
+    day.setUTCDate(since.getUTCDate() + i);
+    const key = day.toISOString().slice(0, 10);
+    return { day: day.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }), amount: byDay[key] || 0 };
+  });
+
   res.send({ 
     totalUsers, 
     totalIssues, 
@@ -70,7 +86,8 @@ router.get("/stats", verifyToken, adminOrMod, async (req, res) => {
     totalVolunteers,
     totalDonations,
     categoryBreakdown,
-    issueTrend: formattedTrend
+    issueTrend: formattedTrend,
+    transactionTrend
   });
 });
 
@@ -206,13 +223,14 @@ router.patch("/membership/:id/status", verifyToken, adminOnly, async (req, res) 
       { email: email },
       { 
         $set: { 
-          role: "member", 
           memberId, 
           verifiedAt: new Date(),
           ...addressDetails
         } 
       }
     );
+    // Promote guests only, so approving a request never demotes a moderator or admin
+    await usersCollection.updateOne({ email, role: { $nin: ["member", "moderator", "admin"] } }, { $set: { role: "member" } });
 
     try {
       const { addPoints } = require("../utils/pointsHelper");
@@ -328,27 +346,44 @@ router.get("/cleanup-events", verifyToken, adminOrMod, async (req, res) => {
 router.patch("/cleanup-events/:id/status", verifyToken, adminOrMod, async (req, res) => {
   try {
     const { id } = req.params;
-    const { approvalStatus, rejectReason } = req.body;
+    const { approvalStatus: action, rejectReason } = req.body;
 
-    const event = await CleanupEvent.findByIdAndUpdate(
-      id,
-      { 
-        approvalStatus, 
-        rejectReason: rejectReason || null,
-        status: approvalStatus === 'approved' ? 'upcoming' : 'cancelled',
-        ...(approvalStatus === 'approved' ? { approvedBy: req.user.email } : {}),
-        ...(approvalStatus === 'rejected' ? { rejectedBy: req.user.email } : {})
-      },
-      { new: true }
-    );
+    const current = await CleanupEvent.findById(id);
+    if (!current) return res.status(404).json({ message: "Event not found" });
 
-    if (!event) return res.status(404).json({ message: "Event not found" });
+    // Allowed moves only. A first approval publishes the event and tells everyone;
+    // reopening a cancelled event just brings it back without a second broadcast.
+    let update;
+    let firstApproval = false;
+    if (action === "approved" && current.approvalStatus === "pending_review") {
+      update = { approvalStatus: "approved", status: "upcoming", approvedBy: req.user.email, rejectReason: null };
+      firstApproval = true;
+    } else if (action === "approved" && current.approvalStatus === "approved" && current.status === "cancelled") {
+      update = { status: "upcoming" };
+    } else if (action === "rejected" && current.approvalStatus === "pending_review") {
+      update = { approvalStatus: "rejected", status: "cancelled", rejectedBy: req.user.email, rejectReason: rejectReason || null };
+    } else if (action === "cancelled" && current.approvalStatus === "approved" && ["upcoming", "ongoing"].includes(current.status)) {
+      update = { status: "cancelled" };
+    } else {
+      return res.status(409).json({ message: `This event is ${current.status} (${current.approvalStatus}); that change isn't possible.` });
+    }
+
+    const event = await CleanupEvent.findByIdAndUpdate(id, { $set: update }, { new: true, runValidators: true });
+    await logAudit({
+      performedBy: { email: req.user.email, name: req.user.name },
+      actorRole: req.user.role,
+      action: `CLEANUP_EVENT_${String(action).toUpperCase()}`,
+      targetType: "cleanup_event",
+      targetId: event._id,
+      previousValue: `${current.approvalStatus}/${current.status}`,
+      newValue: `${event.approvalStatus}/${event.status}`,
+    });
 
     // Respond immediately to prevent timeout on massive loops
     res.json({ success: true, event });
 
-    // Global Notification on Approval (runs in background)
-    if (approvalStatus === "approved") {
+    // Global Notification on the first approval only (runs in background)
+    if (firstApproval) {
       // Create noticeboard announcement automatically
       try {
         const announcementsCollection = getCollection("announcements");
@@ -434,6 +469,10 @@ router.get("/posts", verifyToken, adminOrMod, async (req, res) => {
 router.delete("/posts/:type/:id", verifyToken, adminOrMod, async (req, res) => {
   try {
     const { type, id } = req.params;
+    // Notices are admin-only content (same rule as /announcements)
+    if (type === "announcement" && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Only admins can delete notices." });
+    }
     let collectionName = "";
     
     if (type === "animal") collectionName = "animals";
@@ -550,7 +589,8 @@ router.get("/queue", verifyToken, adminOrMod, async (req, res) => {
     const totalCount = issues.length;
     let paginatedIssues = issues.slice(skip, skip + parseInt(limit));
 
-    if (type === 'all' || type === 'events') {
+    // Events aren't paginated, so send them with the first page only
+    if ((type === 'all' || type === 'events') && parseInt(page) === 1) {
       let eventQuery = {};
       
       if (status) {
@@ -617,6 +657,10 @@ router.patch("/issues/:id/approve", verifyToken, adminOrMod, async (req, res) =>
   try {
     const issue = await Issue.findById(req.params.id);
     if (!issue) return res.status(404).json({ error: "Not found" });
+    // Approving twice would re-award points and re-send notifications
+    if (issue.approvalStatus !== "pending_review") {
+      return res.status(409).json({ error: `This report is already ${issue.approvalStatus.replace("_", " ")}.` });
+    }
     
     const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     
@@ -718,8 +762,9 @@ router.patch("/issues/:id/reject", verifyToken, adminOrMod, async (req, res) => 
 // PATCH /api/admin/cleanup-events/:id/approve
 router.patch("/cleanup-events/:id/approve", verifyToken, adminOrMod, async (req, res) => {
   try {
-    const event = await CleanupEvent.findByIdAndUpdate(
-      req.params.id,
+    // Only a pending event can be approved, so the broadcast below goes out once
+    const event = await CleanupEvent.findOneAndUpdate(
+      { _id: req.params.id, approvalStatus: 'pending_review' },
       {
         $set: {
           approvalStatus: 'approved',
@@ -729,7 +774,10 @@ router.patch("/cleanup-events/:id/approve", verifyToken, adminOrMod, async (req,
       { new: true }
     );
 
-    if (!event) return res.status(404).json({ error: "Not found" });
+    if (!event) {
+      const exists = await CleanupEvent.exists({ _id: req.params.id });
+      return res.status(exists ? 409 : 404).json({ error: exists ? "This event has already been reviewed." : "Not found" });
+    }
 
     // Broadcast notification to ALL users
     const { getCollection } = require("../config/db");
@@ -843,10 +891,15 @@ router.patch("/issues/:id/assign", verifyToken, adminOrMod, async (req, res) => 
     const issue = await Issue.findById(req.params.id);
     if (!issue) return res.status(404).json({ error: "Not found" });
     
-    issue.assignedTo = { email, name, type, assignedAt: new Date() };
+    issue.assignedTo = { email, name, type, assignedAt: new Date(), deadline: deadline ? new Date(deadline) : null, adminNote: adminNote || null };
     issue.status = "action_taken";
     if (adminNote) issue.adminNotes = adminNote;
     await issue.save();
+    // Keep the reporter's ticket in step: in progress, assigned to the same person
+    safely("sync", async () => {
+      await syncTicketStatus(issue._id, "action_taken", { by: req.user.email, note: `Assigned to ${name || email}` });
+      if (issue.ticketCode && email) await updateTicket(issue.ticketCode, { assigneeEmail: email }, req.user.email);
+    });
     
     const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     await logAudit({ action: "ASSIGN_ISSUE", targetType: "issue", targetId: issue._id, performedBy: adminInfo, note: `Assigned to ${name} (${type})`, newValue: "action_taken" });
@@ -890,7 +943,7 @@ router.patch('/forum/:id/pin', verifyToken, adminOrMod, async (req, res) => {
   const thread = await col.findOne({ _id: new ObjectId(req.params.id) });
   const newPinState = !thread.isPinned;
   await col.updateOne({ _id: new ObjectId(req.params.id) }, { $set: { isPinned: newPinState } });
-  await logAudit({ performedBy: req.user.email, action: 'FORUM_THREAD_PINNED', targetId: req.params.id, targetType: 'forum' });
+  await logAudit({ performedBy: { email: req.user.email, name: req.user.name }, actorRole: req.user.role, action: 'FORUM_THREAD_PINNED', targetId: req.params.id, targetType: 'forum' });
 
   // Broadcast pin status update
   const io = req.app.get("io");
@@ -923,7 +976,7 @@ router.patch('/forum/:id/lock', verifyToken, adminOrMod, async (req, res) => {
 router.delete('/forum/:id', verifyToken, adminOrMod, async (req, res) => {
   const col = getCollection('forum');
   await col.deleteOne({ _id: new ObjectId(req.params.id) });
-  await logAudit({ performedBy: req.user.email, action: 'POST_DELETED', targetId: req.params.id, targetType: 'forum' });
+  await logAudit({ performedBy: { email: req.user.email, name: req.user.name }, actorRole: req.user.role, action: 'POST_DELETED', targetId: req.params.id, targetType: 'forum' });
 
   // Broadcast deletion to active thread room and globally
   const io = req.app.get("io");
@@ -961,7 +1014,7 @@ router.patch('/ngos/:id/verify', verifyToken, adminOnly, async (req, res) => {
     priority: 'high',
   });
 
-  await logAudit({ performedBy: req.user.email, action: 'NGO_VERIFIED', targetId: req.params.id, targetType: 'ngo' });
+  await logAudit({ performedBy: { email: req.user.email, name: req.user.name }, actorRole: req.user.role, action: 'NGO_VERIFIED', targetId: req.params.id, targetType: 'ngo' });
   res.json({ success: true });
 });
 
@@ -1049,7 +1102,7 @@ router.patch('/animals/:id/verify-rescue', verifyToken, adminOrMod, async (req, 
         });
       }
 
-      await logAudit({ performedBy: req.user.email, action: 'ANIMAL_RESCUE_APPROVED', targetId: animal._id, targetType: 'animal' });
+      await logAudit({ performedBy: { email: req.user.email, name: req.user.name }, actorRole: req.user.role, action: 'ANIMAL_RESCUE_APPROVED', targetId: animal._id, targetType: 'animal' });
 
     } else if (decision === 'rejected') {
       await col.updateOne(
