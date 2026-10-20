@@ -982,10 +982,15 @@ router.patch('/animals/:id/verify-rescue', verifyToken, adminOrMod, async (req, 
     if (!animal) return res.status(404).json({ message: 'Not found.' });
 
     if (decision === 'approved') {
-      await col.updateOne(
-        { _id: new ObjectId(req.params.id) },
+      // Only a pending rescue can be approved, and only once, so a double click
+      // or two staff members can't award the points twice
+      const approved = await col.updateOne(
+        { _id: new ObjectId(req.params.id), rescueVerificationStatus: 'pending' },
         { $set: { rescueVerificationStatus: 'approved', verifiedAt: new Date(), verifiedBy: req.user.email } }
       );
+      if (approved.modifiedCount !== 1) {
+        return res.status(409).json({ message: 'This rescue has already been reviewed.' });
+      }
 
       const { addPoints } = require("../utils/pointsHelper");
       const { createFeedEvent } = require("../utils/feedHelper");

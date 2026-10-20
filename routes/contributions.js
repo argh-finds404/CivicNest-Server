@@ -3,35 +3,11 @@ const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const { getCollection } = require("../config/db");
 
-// Add new contribution (Protected)
-router.post("/", verifyToken, async (req, res) => {
-  const contributionsCollection = getCollection("contributions");
-  const contribution = {
-    ...req.body,
-    // Always the signed-in user: the body can't attribute a contribution to someone else
-    email: req.user.email,
-    contributorEmail: req.user.email,
-    amount: Number(req.body.amount) || 0,
-    date: new Date()
-  };
-  if (contribution.amount <= 0) {
-    return res.status(400).json({ error: "Amount must be a positive number" });
-  }
-  const result = await contributionsCollection.insertOne(contribution);
-
-  // Trigger feed event
-  try {
-    const { createFeedEvent } = require("../utils/feedHelper");
-    await createFeedEvent("donation_made", {
-      amount: contribution.amount,
-      title: contribution.eventName || contribution.issueTitle || "Community Drive",
-      donor: req.user.name || req.user.displayName || req.user.email.split("@")[0]
-    });
-  } catch (feedErr) {
-    console.error("Failed to trigger donation feed event:", feedErr);
-  }
-
-  res.send(result);
+// Contributions are written by the payment flow (routes/payment.js) once a
+// payment succeeds. Accepting them directly let anyone add money that was never
+// paid to an issue, event or the community total.
+router.post("/", verifyToken, (req, res) => {
+  res.status(410).json({ message: "Please donate through the payment window." });
 });
 
 // Get contributions by email (Protected)
