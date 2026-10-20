@@ -2,6 +2,9 @@
 
 The Express API behind [CivicNest](https://github.com/argh-finds404/CivicNest-Client). Residents report street problems, follow each report as a ticket, join cleanups and look after the neighbourhood together.
 
+* **Live app:** [https://civic-nest-client.vercel.app/](https://civic-nest-client.vercel.app/)
+* **Client repository:** [argh-finds404/CivicNest-Client](https://github.com/argh-finds404/CivicNest-Client)
+
 ## Stack
 
 * Node.js and Express 5
@@ -25,7 +28,9 @@ Prisma reads `DATABASE_URL`, and falls back to `MONGODB_URI` (or `DB_USER`/`DB_P
 
 ## Reviewer accounts
 
-`npm run seed:reviewers` creates three Firebase users with verified emails and matching profiles. Running it again resets them to a clean state.
+Three demo accounts, one per role. Sign in with them on the [live app](https://civic-nest-client.vercel.app/Login) (the **Reviewer demo** buttons fill them in for you).
+
+An admin creates them from **Admin → Users → Set up reviewer logins** (`POST /admin/reviewer-accounts`), or with `npm run seed:reviewers`. Both create Firebase users with verified emails and matching profiles; running either again resets them to a clean state.
 
 | Role | Email | Password |
 | --- | --- | --- |
