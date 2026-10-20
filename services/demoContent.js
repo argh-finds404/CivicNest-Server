@@ -1,8 +1,8 @@
 /**
  * Demo content so a reviewer opening the live app sees a lived-in
  * neighbourhood: community members, issues at every stage (with tickets,
- * comments, votes and proofs), cleanup drives, animal rescues and lost &
- * found posts around Dhaka.
+ * comments, votes and proofs), cleanup drives, animal rescues, lost & found
+ * posts and a recent-activity feed around Dhaka.
  *
  * Every record has a fixed id and `isDemo: true`:
  *  - seedDemoContent()               adds anything missing (safe on every start)
@@ -385,6 +385,26 @@ function lostFoundDoc(l) {
   };
 }
 
+// ── Activity feed (home page "Recent Activity", ticker, leaderboard) ───────
+// `h` is hours ago; times are refreshed on every start so the feed stays recent.
+const FEED = [
+  { n: 1, h: 1, type: "drive_joined", data: { count: 3, driveTitle: "Hatirjheel Lake Cleanup Drive", area: "Hatirjheel" } },
+  { n: 2, h: 2, type: "new_issue", data: { title: "Open manhole without a cover on Uttara Sector 7 footpath", area: "Uttara" } },
+  { n: 3, h: 3, type: "donation_made", data: { donor: "Sadia Islam", amount: 500, title: "Deep pothole outside Banani Road 11 school gate" } },
+  { n: 4, h: 5, type: "animal_rescued", data: { actorName: "Tanvir Ahmed", animalType: "Cat", location: "Gulshan 1" } },
+  { n: 5, h: 7, type: "social_activity", data: { authorName: "Nusaiba Karim", title: "Who else gets flooding on Road 27?", category: "Infrastructure" } },
+  { n: 6, h: 9, type: "new_cleanup_event", data: { driveTitle: "Clear the Drains before Monsoon in Dhanmondi", area: "Dhanmondi", actorName: "Arif Chowdhury" } },
+  { n: 7, h: 12, type: "incident_reported", data: { reporterName: "Arif Chowdhury", category: "Environmental Issues", area: "Mohammadpur", title: "Fallen tree blocking the lane in Mohammadpur Block C" } },
+  { n: 8, h: 16, type: "drive_joined", data: { count: 2, driveTitle: "Plant 100 Trees in Mirpur", area: "Mirpur" } },
+  { n: 9, h: 20, type: "poll_created", data: { actorName: "Farhana Akter", question: "Which park should get new benches first?" } },
+  { n: 10, h: 26, type: "lostfound_reunited", data: { itemName: "School ID card", location: "Dhanmondi" } },
+  { n: 11, h: 30, type: "donation_made", data: { donor: "Rakib Hossain", amount: 1000, title: "Hatirjheel Lake Cleanup Drive" } },
+  { n: 12, h: 40, type: "issue_solved", data: { title: "Streetlight out on Gulshan Avenue side lane", area: "Gulshan" } },
+  { n: 13, h: 60, type: "drive_completed", data: { driveTitle: "Buriganga Riverbank Cleanup", area: "Sadarghat", count: 9 } },
+  { n: 14, h: 72, type: "issue_solved", data: { title: "Garbage dump behind Farmgate market cleared", area: "Farmgate" } },
+];
+const feedDoc = (f) => ({ _id: demoId("6", f.n), type: f.type, data: f.data, createdAt: ago(0, f.h), isDemo: true });
+
 // ── Seeding ──────────────────────────────────────────────────────────────────
 
 /** Insert-if-missing for a batch of docs with fixed _ids */
@@ -411,6 +431,7 @@ async function seedDemoContent(db, { reset = false } = {}) {
       db.collection("cleanupevents").deleteMany({ isDemo: true }),
       db.collection("animals").deleteMany({ isDemo: true }),
       db.collection("lostFound").deleteMany({ isDemo: true }),
+      db.collection("feed_events").deleteMany({ isDemo: true }),
       db.collection("users").deleteMany({ email: { $in: demoEmails }, isDemo: true }),
       prisma.ticket.deleteMany({ where: { issueId: { in: issueIds.map(String) } } }).catch(() => null),
     ]);
@@ -428,6 +449,7 @@ async function seedDemoContent(db, { reset = false } = {}) {
   added.events = await upsertAll(db.collection("cleanupevents"), EVENTS.map(eventDoc));
   added.animals = await upsertAll(db.collection("animals"), ANIMALS.map(animalDoc));
   added.lostFound = await upsertAll(db.collection("lostFound"), LOST_FOUND.map(lostFoundDoc));
+  added.activity = await upsertAll(db.collection("feed_events"), FEED.map(feedDoc));
 
   // Every demo issue gets its ticket, and approved ones move past OPEN
   let tickets = 0;
@@ -466,6 +488,11 @@ async function seedDemoContent(db, { reset = false } = {}) {
   await db.collection("lostFound").updateMany(
     { isDemo: true, status: "open", expiresAt: { $lt: new Date(Date.now() + 7 * DAY) } },
     { $set: { expiresAt: new Date(Date.now() + 30 * DAY) } }
+  );
+  // Demo activity keeps its spacing but moves up to the present
+  await db.collection("feed_events").bulkWrite(
+    FEED.map((f) => ({ updateOne: { filter: { _id: demoId("6", f.n) }, update: { $set: { createdAt: ago(0, f.h) } } } })),
+    { ordered: false }
   );
   return added;
 }

@@ -178,8 +178,9 @@ Reports filed before tickets existed get one at startup.
 * 10 community members
 * 12 issues at every stage, with tickets, comments, votes, crowdfunding and proofs
 * 5 cleanup drives, 5 animal rescues and 5 lost & found posts
+* 14 recent-activity events (`feed_events`) for the home page feed, the ticker and the leaderboard; their times move up to the present on every start
 
-Every record has a fixed id and `isDemo: true`.
+**This is dummy data for demos and reviews.** Every record has a fixed id and `isDemo: true`.
 
 * **On startup** the server adds whatever is missing, so reviewers' actions on demo items survive restarts. It also keeps demo dates current: upcoming drives stay in the future, deadlines don't lapse and listings don't expire. Set `DEMO_CONTENT=off` to skip this.
 * **Reset:** `POST /admin/demo-content` (admin, also the **Reset demo content** button in Admin → Users) or `npm run seed:demo` removes the demo records and adds them fresh.
