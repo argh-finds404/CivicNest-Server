@@ -252,6 +252,10 @@ async function startServer() {
     setImmediate(() =>
       backfillTickets(db.collection("issues")).catch((err) => console.error("[tickets] backfill failed:", err.message))
     );
+    // Animal reports created before status was set on create count as needing help
+    db.collection("animals")
+      .updateMany({ status: { $exists: false } }, { $set: { status: "needs-help" } })
+      .catch((err) => console.error("[animals] status backfill failed:", err.message));
     server.listen(port, () => {
       console.log(`CivicNest Server running on port ${port}`);
     });
