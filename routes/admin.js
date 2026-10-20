@@ -113,6 +113,31 @@ router.patch("/users/:id/role", verifyToken, adminOnly, async (req, res) => {
   });
   res.send(result);
 });
+// Create or reset the reviewer demo accounts (same as `npm run seed:reviewers`),
+// so an admin can set them up from the dashboard on the live server
+router.post("/reviewer-accounts", verifyToken, adminOnly, async (req, res) => {
+  if (req.user.isDemo) {
+    return res.status(403).json({ error: "Reviewer demo accounts can't reset reviewer logins." });
+  }
+  try {
+    const { seedReviewers, REVIEWER_PASSWORD } = require("../services/reviewers");
+    const accounts = await seedReviewers(getCollection("users"));
+    const me = await getCollection("users").findOne({ email: req.user.email }, { projection: { _id: 1 } });
+    if (me) await logAudit({
+      performedBy: { email: req.user.email, name: req.user.name },
+      actorRole: req.user.role,
+      action: "SEED_REVIEWER_ACCOUNTS",
+      targetType: "user",
+      targetId: me._id,
+      newValue: accounts.map((a) => a.email).join(", "),
+    });
+    res.json({ accounts, password: REVIEWER_PASSWORD });
+  } catch (err) {
+    console.error("Reviewer account setup failed:", err);
+    res.status(500).json({ error: err.message || "Couldn't set up reviewer accounts." });
+  }
+});
+
 // Get all membership requests
 router.get("/membership", verifyToken, adminOnly, async (req, res) => {
   const membershipCollection = getCollection("membershipRequests");
