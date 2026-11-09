@@ -156,6 +156,24 @@ app.post("/upload", verifyToken, adminOnly, async (req, res) => {
 });
 
 
+// Image upload proxy for when the client has no ImgBB key. freeimage.host sends no CORS headers, so the browser can't call it directly.
+app.post("/upload-image", verifyToken, async (req, res) => {
+  const { base64 } = req.body;
+  if (!base64) return res.status(400).json({ error: "Missing image data" });
+  try {
+    const r = await fetch("https://freeimage.host/api/1/upload?key=6d207e02198a847aa98d0a2a901485a5", {
+      method: "POST",
+      body: new URLSearchParams({ source: base64, format: "json" }),
+    });
+    const data = await r.json();
+    if (!data.image?.url) return res.status(502).json({ error: data.error?.message || "Image host rejected the upload" });
+    res.json({ url: data.image.url });
+  } catch (error) {
+    console.error("Image upload error:", error);
+    res.status(502).json({ error: "Image host unreachable" });
+  }
+});
+
 const { connectDB } = require("./config/db");
 const { backfillTickets } = require("./services/tickets");
 const { seedDemoContent } = require("./services/demoContent");
