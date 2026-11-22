@@ -358,7 +358,7 @@ function haversineDistance(lat1, lng1, lat2, lng2) {
 // POST /api/issues/:id/proofs - Resolver uploads proof
 router.post("/:id/proofs", verifyToken, memberOnly, async (req, res) => {
   try {
-    const { photos, images, notes, coordinates } = req.body;
+    const { photos, images, notes, coordinates } = req.body || {};
     const issue = await Issue.findById(req.params.id);
     if (!issue) return res.status(404).json({ error: "Not found" });
     
@@ -431,7 +431,7 @@ router.post("/:id/proofs", verifyToken, memberOnly, async (req, res) => {
 // POST /api/issues/:id/verify - Community verification
 router.post("/:id/verify", verifyToken, memberOnly, async (req, res) => {
   try {
-    const { coordinates } = req.body;
+    const { coordinates } = req.body || {};
     const issue = await Issue.findById(req.params.id);
     if (!issue) return res.status(404).json({ error: "Not found" });
 
