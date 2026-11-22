@@ -19,6 +19,11 @@ router.patch("/:id", verifyToken, async (req, res) => {
     comment.editedAt = new Date();
     await comment.save();
 
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: comment.issueId });
+    }
+
     res.json({ success: true, editedAt: comment.editedAt });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -45,6 +50,11 @@ router.delete("/:id", verifyToken, async (req, res) => {
     if (issue) {
       issue.commentCount = Math.max(0, issue.commentCount - 1);
       await issue.save();
+    }
+
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: comment.issueId });
     }
 
     res.json({ success: true });

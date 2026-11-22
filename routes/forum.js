@@ -272,14 +272,18 @@ router.post('/:id/upvote', verifyToken, async (req, res) => {
 
   const updatedThread = await col.findOne({ _id: new ObjectId(req.params.id) });
 
-  // Broadcast updated upvotes globally
+  // Broadcast updated upvotes globally and to active room
   const io = req.app.get("io");
   if (io) {
-    io.emit("thread_updated_global", { 
+    const updatePayload = { 
       threadId: req.params.id, 
       upvoteCount: updatedThread.upvoteCount,
-      upvotes: updatedThread.upvotes
-    });
+      upvotes: updatedThread.upvotes,
+      isPinned: updatedThread.isPinned,
+      isLocked: updatedThread.isLocked
+    };
+    io.to(`thread:${req.params.id}`).emit("thread_updated", updatePayload);
+    io.emit("thread_updated_global", updatePayload);
   }
 
   res.json({ upvoted: !alreadyUpvoted });

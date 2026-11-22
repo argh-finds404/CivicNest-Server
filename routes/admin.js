@@ -835,6 +835,11 @@ router.patch("/cleanup-events/:id/approve", verifyToken, adminOrMod, async (req,
     const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     await logAudit({ performedBy: adminInfo, action: 'CLEANUP_EVENT_APPROVED', targetId: event._id, targetType: 'cleanup_event' });
 
+    const io = req.app.get("io");
+    if (io) {
+      io.emit('issueStatusUpdated', { eventId: event._id, status: event.status, approvalStatus: 'approved' });
+    }
+
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -853,6 +858,11 @@ router.patch("/cleanup-events/:id/reject", verifyToken, adminOrMod, async (req, 
 
     const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     await logAudit({ performedBy: adminInfo, action: 'CLEANUP_EVENT_REJECTED', targetId: event._id, targetType: 'cleanup_event' });
+
+    const io = req.app.get("io");
+    if (io) {
+      io.emit('issueStatusUpdated', { eventId: event._id, approvalStatus: 'rejected' });
+    }
 
     res.json({ success: true });
   } catch (error) {
@@ -877,6 +887,11 @@ router.patch("/issues/:id/status", verifyToken, adminOrMod, async (req, res) => 
     
     const adminInfo = { email: req.user.email, name: req.user.name || "Admin", role: req.user.role };
     await logAudit({ action: "CHANGE_STATUS", targetType: "issue", targetId: issue._id, performedBy: adminInfo, note: `Changed status to ${status}`, oldValue: previousValue, newValue: status });
+
+    const io = req.app.get("io");
+    if (io) {
+      io.emit('issueStatusUpdated', { issueId: issue._id, status: issue.status, approvalStatus: issue.approvalStatus });
+    }
     
     res.json({ success: true });
   } catch (error) {
@@ -931,6 +946,11 @@ router.patch("/issues/:id/assign", verifyToken, adminOrMod, async (req, res) => 
     }
     if (email) {
       await createNotification({ email, message: `You have been assigned to an issue: ${issue.title}`, type: "assignment", link: `/issues/${issue._id}` });
+    }
+
+    const io = req.app.get("io");
+    if (io) {
+      io.emit('issueStatusUpdated', { issueId: issue._id, status: issue.status, approvalStatus: issue.approvalStatus });
     }
 
     res.json({ success: true, assignedTo: issue.assignedTo });

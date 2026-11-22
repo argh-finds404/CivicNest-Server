@@ -76,6 +76,11 @@ router.post("/", verifyToken, async (req, res) => {
     await Issue.updateOne({ _id: issueId }, { $inc: { commentCount: 1 } });
     await updateStreak(req.user.email);
 
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId });
+    }
+
     res.status(201).json(newComment);
   } catch (error) {
     res.status(400).json({ error: error.message, details: error.errors });

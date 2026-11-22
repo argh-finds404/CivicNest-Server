@@ -43,46 +43,61 @@ app.set("io", io);
 
 const activeRooms = {}; // { threadId: { socketId: { email, name, photo } } }
 
+const getUniqueOnlineUsers = (threadId) => {
+  if (!activeRooms[threadId]) return [];
+  const byEmail = new Map();
+  for (const u of Object.values(activeRooms[threadId])) {
+    if (u && u.email) byEmail.set(u.email, u);
+  }
+  return Array.from(byEmail.values());
+};
+
 io.on("connection", (socket) => {
   const handleLeave = (threadId) => {
-    if (activeRooms[threadId] && activeRooms[threadId][socket.id]) {
-      delete activeRooms[threadId][socket.id];
-      if (Object.keys(activeRooms[threadId]).length === 0) {
-        delete activeRooms[threadId];
+    if (!threadId) return;
+    const key = String(threadId);
+    if (activeRooms[key] && activeRooms[key][socket.id]) {
+      delete activeRooms[key][socket.id];
+      if (Object.keys(activeRooms[key]).length === 0) {
+        delete activeRooms[key];
+        io.to(`thread:${key}`).emit("room_users", []);
       } else {
-        const onlineUsers = Object.values(activeRooms[threadId]);
-        io.to(`thread:${threadId}`).emit("room_users", onlineUsers);
+        io.to(`thread:${key}`).emit("room_users", getUniqueOnlineUsers(key));
       }
     }
   };
 
   socket.on("join_thread", (data) => {
-    const payload = typeof data === 'object' ? data : { threadId: data };
+    const payload = typeof data === 'object' && data !== null ? data : { threadId: data };
     const { threadId, userEmail, userName, userPhoto } = payload;
+    if (!threadId) return;
+    const key = String(threadId);
     
-    socket.join(`thread:${threadId}`);
+    socket.join(`thread:${key}`);
     
     if (userEmail) {
-      if (!activeRooms[threadId]) activeRooms[threadId] = {};
-      activeRooms[threadId][socket.id] = { 
+      if (!activeRooms[key]) activeRooms[key] = {};
+      activeRooms[key][socket.id] = { 
         email: userEmail, 
         name: userName || userEmail, 
         photo: userPhoto || null 
       };
-      
-      const onlineUsers = Object.values(activeRooms[threadId]);
-      io.to(`thread:${threadId}`).emit("room_users", onlineUsers);
     }
+
+    io.to(`thread:${key}`).emit("room_users", getUniqueOnlineUsers(key));
   });
 
   socket.on("leave_thread", (data) => {
-    const threadId = typeof data === 'object' ? data.threadId : data;
-    socket.leave(`thread:${threadId}`);
-    handleLeave(threadId);
+    const threadId = typeof data === 'object' && data !== null ? data.threadId : data;
+    if (!threadId) return;
+    const key = String(threadId);
+    socket.leave(`thread:${key}`);
+    handleLeave(key);
   });
 
-  socket.on("typing", ({ threadId, userEmail, userName, isTyping }) => {
-    socket.to(`thread:${threadId}`).emit("user_typing", { userEmail, userName, isTyping });
+  socket.on("typing", ({ threadId, userEmail, userName, isTyping } = {}) => {
+    if (!threadId) return;
+    socket.to(`thread:${String(threadId)}`).emit("user_typing", { userEmail, userName, isTyping });
   });
 
   socket.on("disconnect", () => {

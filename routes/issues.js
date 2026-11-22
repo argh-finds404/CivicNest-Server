@@ -252,6 +252,11 @@ router.post("/", verifyToken, creditCheck("issues"), async (req, res) => {
       console.error("[tickets] create failed for issue", String(newIssue._id), err.message);
     }
 
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: newIssue._id, status: newIssue.status, approvalStatus: newIssue.approvalStatus });
+    }
+
     res.status(201).json({ success: true, issueId: newIssue._id, ticketCode, creditInfo: req.creditInfo });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -310,6 +315,10 @@ router.patch("/:id", verifyToken, async (req, res) => {
 
     await issue.save();
     safely("sync", () => syncTicketStatus(issue._id, issue.status, { by: req.user.email }));
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: issue._id, status: issue.status, approvalStatus: issue.approvalStatus });
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -325,6 +334,10 @@ router.delete("/:id", verifyToken, async (req, res) => {
 
     issue.isHidden = true;
     await issue.save();
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: issue._id, isHidden: true });
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -402,6 +415,11 @@ router.post("/:id/proofs", verifyToken, memberOnly, async (req, res) => {
         type:     'verification',
         link:     `/issues/${issue._id}`,
       });
+    }
+
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: issue._id, status: issue.status });
     }
 
     res.json({ success: true, gpsMatch, issue: stripIdentityIfAnonymous(issue), proofs: issue.resolutionProofs });
@@ -534,6 +552,10 @@ router.post("/:id/verify", verifyToken, memberOnly, async (req, res) => {
     await issue.save();
     if (solved) safely("sync", () => syncTicketStatus(issue._id, "solved", { by: "community", note: "Verified by 3 neighbours" }));
     await updateStreak(req.user.email);
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: issue._id, status: issue.status, verificationCount: issue.verificationCount, solved });
+    }
     res.json({
       success: true,
       solved,
@@ -570,6 +592,10 @@ router.patch("/:id/upvote", verifyToken, async (req, res) => {
     issue.netScore = issue.upvotes.length - issue.downvotes.length;
     await issue.save();
     await updateStreak(req.user.email);
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: issue._id, netScore: issue.netScore });
+    }
     res.json({ netScore: issue.netScore, userVote, upvotes: issue.upvotes, downvotes: issue.downvotes });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -599,6 +625,10 @@ router.patch("/:id/downvote", verifyToken, async (req, res) => {
     issue.netScore = issue.upvotes.length - issue.downvotes.length;
     await issue.save();
     await updateStreak(req.user.email);
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: issue._id, netScore: issue.netScore });
+    }
     res.json({ netScore: issue.netScore, userVote, upvotes: issue.upvotes, downvotes: issue.downvotes });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -623,6 +653,10 @@ router.patch("/:id/flag", verifyToken, async (req, res) => {
     }
     
     await issue.save();
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: issue._id, isHidden: issue.isHidden });
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -659,6 +693,10 @@ router.post("/:id/witness", verifyToken, async (req, res) => {
     }
     
     await issue.save();
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: issue._id });
+    }
     res.json({ success: true, witnesses: issue.witnesses, witnessDetails: issue.witnessDetails });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -724,6 +762,11 @@ router.post('/:id/claim', verifyToken, memberOnly, async (req, res) => {
     );
     if (firstClaim.modifiedCount === 1) await addPoints(email, 'issue_claimed');
 
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: updated._id, status: updated.status, assignedTo: updated.assignedTo });
+    }
+
     res.json({ success: true, issue: stripIdentityIfAnonymous(updated) });
 
   } catch (err) {
@@ -771,6 +814,11 @@ router.post('/:id/unclaim', verifyToken, async (req, res) => {
         type:    'assignment',
         link:    `/issues/${issue._id}`,
       });
+    }
+
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("issueStatusUpdated", { issueId: issue._id, status: issue.status });
     }
 
     res.json({ success: true });
